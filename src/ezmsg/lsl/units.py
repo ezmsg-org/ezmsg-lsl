@@ -145,6 +145,9 @@ class LSLInletUnit(ez.Unit):
 
     OUTPUT_SIGNAL = ez.OutputStream(AxisArray)
 
+    # Share timestamp offset (lsl -> sys time) across all instances
+    clock_state: dict = {"clock_offset": 0.0, "last_update": 0.0, "alpha": 0.1, "interval": 1.0, "count": 0}
+
     def __init__(self, *args, **kwargs) -> None:
         """
         Handle deprecated arguments. Whereas previously stream_name and stream_type were in the
@@ -206,14 +209,23 @@ class LSLInletUnit(ez.Unit):
             self.STATE.inlet.close_stream()
         self.STATE.inlet = None
 
-    def _update_clock_offset(self) -> None:
+    def fetch_offset(self) -> float:
         if self.SETTINGS.use_lsl_clock:
-            new_offset = 0.0
-        else:
-            pair = (time.time(), pylsl.local_clock())
-            new_offset = pair[0] - pair[1]
-            # TODO: Exponential decay smoothing
-        self.STATE.clock_offset = new_offset
+            return 0.0
+        _clk_state = self.__class__.clock_state  # More friendly name
+        if (time.time() - _clk_state["last_update"]) >= _clk_state["interval"]:
+            if _clk_state["count"] % 2:
+                pair = (pylsl.local_clock(), time.time())[::-1]
+            else:
+                pair = (time.time(), pylsl.local_clock())
+            offset = pair[0] - pair[1]
+            # Exponential smoothing
+            if _clk_state["last_update"] > 0:
+                offset = (1 - _clk_state["alpha"]) * _clk_state["clock_offset"] + _clk_state["alpha"] * offset
+            _clk_state["last_update"] = pair[0]
+            _clk_state["clock_offset"] = offset
+            _clk_state["count"] += 1
+        return _clk_state["clock_offset"]
 
     @ez.publisher(OUTPUT_SIGNAL)
     async def lsl_pull(self) -> typing.AsyncGenerator:
@@ -257,7 +269,6 @@ class LSLInletUnit(ez.Unit):
             }
         )
 
-        last_sync_update = time.time() - 1.0
         while self.STATE.inlet is not None:
             if self._fetch_buffer is not None:
                 samples, timestamps = self.STATE.inlet.pull_chunk(
@@ -267,16 +278,15 @@ class LSLInletUnit(ez.Unit):
             else:
                 samples, timestamps = self.STATE.inlet.pull_chunk()
                 samples = np.array(samples)
-            t_now = time.time()
-            if not self.SETTINGS.use_arrival_time and (t_now - last_sync_update) >= 1.0:
-                self._update_clock_offset()
-                last_sync_update = t_now
+
+            # Attempt to update the clock offset (shared across all instances)
             if len(timestamps):
                 data = self._fetch_buffer[:len(timestamps)].copy() if samples is None else samples
                 if self.SETTINGS.use_arrival_time:
-                    t0 = t_now - (timestamps[-1] - timestamps[0])
+                    # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
+                    t0 = time.time() - (timestamps[-1] - timestamps[0])
                 else:
-                    t0 = timestamps[0] + self.STATE.clock_offset
+                    t0 = timestamps[0] + self.fetch_offset()
                 if fs <= 0.0:
                     # Irregular rate streams need to be streamed sample-by-sample
                     for ts, samp in zip(timestamps, data):
