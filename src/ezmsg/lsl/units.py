@@ -68,8 +68,8 @@ class LSLOutletUnit(ez.Unit):
 
     INPUT_SIGNAL = ez.InputStream(AxisArray)
 
-    SETTINGS: LSLOutletSettings
-    STATE: LSLOutletState
+    SETTINGS = LSLOutletSettings
+    STATE = LSLOutletState
 
     def initialize(self) -> None:
         self._stream_created = False
@@ -140,8 +140,8 @@ class LSLInletUnit(ez.Unit):
         stream_name: The `name` of the created LSL outlet.
         stream_type: The `type` of the created LSL outlet.
     """
-    SETTINGS: LSLInletSettings
-    STATE: LSLInletState
+    SETTINGS = LSLInletSettings
+    STATE = LSLInletState
 
     OUTPUT_SIGNAL = ez.OutputStream(AxisArray)
 
