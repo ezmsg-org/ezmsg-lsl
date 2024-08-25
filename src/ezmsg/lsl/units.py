@@ -71,7 +71,7 @@ class LSLOutletUnit(ez.Unit):
     SETTINGS = LSLOutletSettings
     STATE = LSLOutletState
 
-    def initialize(self) -> None:
+    async def initialize(self) -> None:
         self._stream_created = False
 
     def shutdown(self) -> None:
@@ -172,7 +172,7 @@ class LSLInletUnit(ez.Unit):
             kwargs["info"] = LSLInfo(**info_kwargs)
         super().__init__(*args, **kwargs)
 
-    def initialize(self) -> None:
+    async def initialize(self) -> None:
         # TODO: If name, type, and host are all provided, then create the StreamInfo directly and
         #  create the inlet directly from that info.
         # else:
