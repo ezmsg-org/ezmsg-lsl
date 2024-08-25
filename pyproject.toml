@@ -12,14 +12,14 @@ packages = [
 python = ">=3.9,<3.13"
 pylsl = "^1.16.2"
 numpy = "^1.26.4"
-ezmsg = "^3.3.0"
+ezmsg = { git = "https://github.com/ezmsg-org/ezmsg.git", branch = "dev" }
 
 
 [tool.poetry.group.test.dependencies]
-ezmsg-sigproc = { git = "https://github.com/ezmsg-org/ezmsg-sigproc.git", branch = "dev" }
 pytest = "^7.0.0"
 pytest-cov = "*"
 flake8 = "*"
+ezmsg-sigproc = { git = "https://github.com/ezmsg-org/ezmsg-sigproc.git", branch = "dev" }
 
 
 [build-system]
