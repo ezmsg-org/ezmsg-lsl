@@ -208,7 +208,7 @@ class LSLInletUnit(ez.Unit):
             self.STATE.inlet.close_stream()
         self.STATE.inlet = None
 
-    def fetch_offset(self) -> float:
+    def convert_timestamp(self, lsl_timestamp: float) -> float:
         if self.SETTINGS.use_lsl_clock:
             return 0.0
         _clk_state = self.__class__.clock_state  # More friendly name
@@ -224,7 +224,7 @@ class LSLInletUnit(ez.Unit):
             _clk_state["last_update"] = pair[0]
             _clk_state["clock_offset"] = offset
             _clk_state["count"] += 1
-        return _clk_state["clock_offset"]
+        return lsl_timestamp + _clk_state["clock_offset"]
 
     @ez.publisher(OUTPUT_SIGNAL)
     async def lsl_pull(self) -> typing.AsyncGenerator:
@@ -285,7 +285,7 @@ class LSLInletUnit(ez.Unit):
                     # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
                     t0 = time.time() - (timestamps[-1] - timestamps[0])
                 else:
-                    t0 = timestamps[0] + self.fetch_offset()
+                    t0 = self.convert_timestamp(timestamps[0])
                 if fs <= 0.0:
                     # Irregular rate streams need to be streamed sample-by-sample
                     for ts, samp in zip(timestamps, data):
