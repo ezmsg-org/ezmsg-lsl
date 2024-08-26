@@ -173,9 +173,8 @@ class LSLInletUnit(ez.Unit):
         super().__init__(*args, **kwargs)
 
     async def initialize(self) -> None:
-        # TODO: If name, type, and host are all provided, then create the StreamInfo directly and
+        # If name, type, and host are all provided, then create the StreamInfo directly and
         #  create the inlet directly from that info.
-        # else:
         if all([_ is not None for _ in [
             self.SETTINGS.info.name,
             self.SETTINGS.info.type,
