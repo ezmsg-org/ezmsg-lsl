@@ -289,11 +289,28 @@ class LSLInletUnit(ez.Unit):
                 if fs <= 0.0:
                     # Irregular rate streams need to be streamed sample-by-sample
                     for ts, samp in zip(timestamps, data):
-                        msg_template.axes["time"].offset = t0 + (ts - timestamps[0])
-                        yield self.OUTPUT_SIGNAL, replace(msg_template, data=samp[None, ...])
+                        out_msg = replace(
+                            msg_template,
+                            data=samp[None, ...],
+                            axes={
+                                **msg_template.axes,
+                                "time": replace(
+                                    msg_template.axes["time"],
+                                    offset=t0 + (ts - timestamps[0])
+                                )
+                            }
+                        )
+                        yield self.OUTPUT_SIGNAL, out_msg
                 else:
                     # Regular-rate streams can go in a chunk
-                    msg_template.axes["time"].offset = t0
-                    yield self.OUTPUT_SIGNAL, replace(msg_template, data=data)
+                    out_msg = replace(
+                        msg_template,
+                        data=data,
+                        axes={
+                            **msg_template.axes,
+                            "time": replace(msg_template.axes["time"], offset=t0)
+                        }
+                    )
+                    yield self.OUTPUT_SIGNAL, out_msg
             else:
                 await asyncio.sleep(0.001)
