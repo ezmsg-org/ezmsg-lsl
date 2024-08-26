@@ -5,9 +5,10 @@ import typing
 
 import numpy as np
 import pylsl
-
 import ezmsg.core as ez
 from ezmsg.util.messages.axisarray import AxisArray
+
+from .util import LinearRegressionSGD
 
 
 @dataclass
@@ -125,6 +126,27 @@ class LSLInletSettings(ez.Settings):
     use_lsl_clock: bool = False
 
 
+class ClockSync:
+    def __init__(self, learning_rate: float = 0.1, interval: float = 1.0):
+        self.model = LinearRegressionSGD(learning_rate=learning_rate)
+        self.interval = interval
+        self.last_update = 0.0
+        self.count = 0
+
+    def update(self, ignore_interval: bool = False) -> None:
+        if ignore_interval or (time.time() - self.last_update) >= self.interval:
+            if self.count % 2:
+                y, x = time.time(), pylsl.local_clock()
+            else:
+                x, y = pylsl.local_clock(), time.time()
+            self.model.partial_fit(np.array([[x]]), np.array([y]))
+            self.last_update = y
+            self.count += 1
+
+    def convert_timestamp(self, lsl_timestamp: float) -> float:
+        return self.model.predict(np.array([[lsl_timestamp]]))[0]
+
+
 class LSLInletState(ez.State):
     resolver: typing.Optional[pylsl.ContinuousResolver] = None
     inlet: typing.Optional[pylsl.StreamInlet] = None
@@ -145,8 +167,8 @@ class LSLInletUnit(ez.Unit):
 
     OUTPUT_SIGNAL = ez.OutputStream(AxisArray)
 
-    # Share timestamp offset (lsl -> sys time) across all instances
-    clock_state: dict = {"clock_offset": 0.0, "last_update": 0.0, "alpha": 0.1, "interval": 1.0, "count": 0}
+    # Share clock correction across all instances
+    clock_sync = ClockSync()
 
     def __init__(self, *args, **kwargs) -> None:
         """
@@ -173,6 +195,11 @@ class LSLInletUnit(ez.Unit):
         super().__init__(*args, **kwargs)
 
     async def initialize(self) -> None:
+        # Start with an aggressive clock sync
+        while self.clock_sync.count < 1000:
+            self.clock_sync.update(ignore_interval=True)
+            await asyncio.sleep(0.001)
+
         # If name, type, and host are all provided, then create the StreamInfo directly and
         #  create the inlet directly from that info.
         if all([_ is not None for _ in [
@@ -208,23 +235,11 @@ class LSLInletUnit(ez.Unit):
             self.STATE.inlet.close_stream()
         self.STATE.inlet = None
 
-    def convert_timestamp(self, lsl_timestamp: float) -> float:
-        if self.SETTINGS.use_lsl_clock:
-            return 0.0
-        _clk_state = self.__class__.clock_state  # More friendly name
-        if (time.time() - _clk_state["last_update"]) >= _clk_state["interval"]:
-            if _clk_state["count"] % 2:
-                pair = (pylsl.local_clock(), time.time())[::-1]
-            else:
-                pair = (time.time(), pylsl.local_clock())
-            offset = pair[0] - pair[1]
-            # Exponential smoothing
-            if _clk_state["last_update"] > 0:
-                offset = (1 - _clk_state["alpha"]) * _clk_state["clock_offset"] + _clk_state["alpha"] * offset
-            _clk_state["last_update"] = pair[0]
-            _clk_state["clock_offset"] = offset
-            _clk_state["count"] += 1
-        return lsl_timestamp + _clk_state["clock_offset"]
+    @ez.task
+    async def clock_sync_task(self) -> None:
+        while True:
+            self.clock_sync.update()
+            await asyncio.sleep(0.1)
 
     @ez.publisher(OUTPUT_SIGNAL)
     async def lsl_pull(self) -> typing.AsyncGenerator:
@@ -284,8 +299,10 @@ class LSLInletUnit(ez.Unit):
                 if self.SETTINGS.use_arrival_time:
                     # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
                     t0 = time.time() - (timestamps[-1] - timestamps[0])
+                elif self.SETTINGS.use_lsl_clock:
+                    t0 = timestamps[0]
                 else:
-                    t0 = self.convert_timestamp(timestamps[0])
+                    t0 = self.clock_sync.convert_timestamp(timestamps[0])
                 if fs <= 0.0:
                     # Irregular rate streams need to be streamed sample-by-sample
                     for ts, samp in zip(timestamps, data):
