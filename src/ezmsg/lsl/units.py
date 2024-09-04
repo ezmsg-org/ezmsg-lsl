@@ -276,7 +276,8 @@ class LSLInletUnit(ez.Unit):
             axes={
                 "time": AxisArray.Axis.TimeAxis(fs=fs if fs else 1.0),  # HACK: Use 1.0 for irregular rate.
                 "ch": AxisArray.Axis.SpaceAxis(labels=ch_labels)
-            }
+            },
+            key=inlet_info.name()
         )
 
         while self.clock_sync.count < 1000:
