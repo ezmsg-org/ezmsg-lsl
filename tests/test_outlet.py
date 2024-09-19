@@ -1,3 +1,4 @@
+"""
 import os
 import json
 
@@ -65,7 +66,6 @@ class DownsampleSystem(ez.Collection):
         )
 
 
-"""
 @pytest.mark.parametrize("block_size", [1, 5, 10, 20])
 @pytest.mark.parametrize("factor", [1, 2, 3])
 def test_downsample_system(
