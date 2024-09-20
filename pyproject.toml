@@ -34,5 +34,10 @@ version-file = "src/ezmsg/lsl/__version__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/ezmsg"]
 
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.6.6",
+]
+
 [tool.uv.sources]
 ezmsg-sigproc = { git = "https://github.com/ezmsg-org/ezmsg-sigproc.git", branch = "dev" }
