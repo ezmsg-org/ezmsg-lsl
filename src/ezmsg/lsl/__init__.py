@@ -1,4 +1,1 @@
-import importlib.metadata
-
-
-__version__ = importlib.metadata.version("ezmsg-lsl")
+from .__version__ import __version__

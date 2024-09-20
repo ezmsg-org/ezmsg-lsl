@@ -1,27 +1,38 @@
-[tool.poetry]
+[project]
 name = "ezmsg-lsl"
-version = "0.2.0"
 description = "LabStreamingLayer source and sink for ezmsg"
-authors = ["Chadwick Boulay <chad@cbneurotech.com>"]
+authors = [
+  { name = "Chadwick Boulay", email = "chadwick.boulay@gmail.com" },
+]
 readme = "README.md"
-packages = [
-  { include = "ezmsg", from = "src" }
+requires-python = ">=3.9"
+dependencies = [
+    "ezmsg>=3.5.0",
+    "numpy",
+    "pylsl>=1.16.2",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+test = [
+    "ezmsg-sigproc",
+    "flake8>=7.1.1",
+    "pytest-cov>=5.0.0",
+    "pytest>=8.3.3",
 ]
 
-[tool.poetry.dependencies]
-python = ">=3.9,<3.13"
-pylsl = "^1.16.2"
-numpy = "^1.26.4"
-ezmsg = "^3.5.0"
-
-
-[tool.poetry.group.test.dependencies]
-pytest = "^7.0.0"
-pytest-cov = "*"
-flake8 = "*"
-ezmsg-sigproc = { git = "https://github.com/ezmsg-org/ezmsg-sigproc.git", branch = "dev" }
-
-
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/ezmsg/lsl/__version__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ezmsg"]
+
+[tool.uv.sources]
+ezmsg-sigproc = { git = "https://github.com/ezmsg-org/ezmsg-sigproc.git", branch = "dev" }
