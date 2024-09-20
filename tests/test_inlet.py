@@ -1,19 +1,14 @@
-"""
 import os
 import json
 from pathlib import Path
 import tempfile
 
-import pytest
 import numpy as np
 
 import ezmsg.core as ez
 from ezmsg.util.messages.axisarray import AxisArray
 
 from ezmsg.lsl.units import LSLInfo, LSLInletSettings, LSLInletUnit
-
-
-from typing import Optional, List
 
 
 def test_inlet_init_defaults():
@@ -71,4 +66,3 @@ def test_inlet_init_with_settings():
 
     # counts, bins = np.histogram(np.diff(tvec), 20)
     assert np.max(np.diff(tvec)) < 0.003
-"""

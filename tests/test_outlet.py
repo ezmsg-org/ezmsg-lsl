@@ -1,6 +1,4 @@
-"""
 import os
-import json
 
 import pytest
 import numpy as np
@@ -131,4 +129,3 @@ def test_downsample_system(
 
 if __name__ == "__main__":
     test_downsample_system(10, 2, test_name="test_window_system")
-"""
