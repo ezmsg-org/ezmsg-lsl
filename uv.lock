@@ -107,7 +107,7 @@ wheels = [
 
 [[package]]
 name = "ezmsg-lsl"
-version = "0.2.1.dev0+g625dc36.d20240920"
+version = "0.2.2.dev0+g8a725f7.d20240920"
 source = { editable = "." }
 dependencies = [
     { name = "ezmsg" },
@@ -133,7 +133,7 @@ requires-dist = [
     { name = "ezmsg", specifier = ">=3.5.0" },
     { name = "ezmsg-sigproc", marker = "extra == 'test'", git = "https://github.com/ezmsg-org/ezmsg-sigproc.git?branch=dev" },
     { name = "flake8", marker = "extra == 'test'", specifier = ">=7.1.1" },
-    { name = "numpy" },
+    { name = "numpy", specifier = ">=1.26.4" },
     { name = "pylsl", specifier = ">=1.16.2" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },

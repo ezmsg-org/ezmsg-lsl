@@ -8,7 +8,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "ezmsg>=3.5.0",
-    "numpy",
+    "numpy>=1.26.4",
     "pylsl>=1.16.2",
 ]
 dynamic = ["version"]
