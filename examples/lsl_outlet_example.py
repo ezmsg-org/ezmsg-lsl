@@ -2,6 +2,7 @@
 In this example, we create a System comprising a simple graph from a
 EEGSynth to an LSL Outlet.
 """
+
 from typing import Tuple
 
 import ezmsg.core as ez
