@@ -110,6 +110,9 @@ class LSLInletSettings(ez.Settings):
     # Setting `use_arrival_time=False, use_lsl_clock=True` is the only way to accommodate playback rate != 1.0 and keep
     # the axis .offset consistent with the original samplerate.
     use_lsl_clock: bool = False
+    processing_flags: int = pylsl.proc_ALL
+    # The processing flags option passed to pylsl.StreamInlet. Default is proc_ALL which includes all flags.
+    # Many users will want to set this to pylsl.proc_clocksync to disable dejittering.
 
 
 class ClockSync:
@@ -210,7 +213,7 @@ class LSLInletUnit(ez.Unit):
                 channel_count=self.SETTINGS.info.channel_count,
                 channel_format=self.SETTINGS.info.channel_format
             )
-            self.STATE.inlet = pylsl.StreamInlet(info, max_chunklen=1, processing_flags=pylsl.proc_ALL)
+            self.STATE.inlet = pylsl.StreamInlet(info, max_chunklen=1, processing_flags=self.SETTINGS.processing_flags)
         else:
             # Build the predicate string. This uses XPATH syntax and can filter on anything in the stream info. e.g.,
             # `"name='BioSemi'" or "type='EEG' and starts-with(name,'BioSemi') and count(info/desc/channel)=32"`
