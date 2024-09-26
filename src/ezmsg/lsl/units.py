@@ -36,7 +36,9 @@ fmt2npdtype = {
 class LSLOutletSettings(ez.Settings):
     stream_name: typing.Optional[str] = None
     stream_type: typing.Optional[str] = None
-    map_file: typing.Optional[str] = None  # Path to file containing a list of channel names and locations.
+    map_file: typing.Optional[str] = (
+        None  # Path to file containing a list of channel names and locations.
+    )
 
 
 class LSLOutletState(ez.State):
@@ -166,6 +168,7 @@ class LSLInletUnit(ez.Unit):
         stream_name: The `name` of the created LSL outlet.
         stream_type: The `type` of the created LSL outlet.
     """
+
     SETTINGS = LSLInletSettings
     STATE = LSLInletState
 
@@ -186,8 +189,10 @@ class LSLInletUnit(ez.Unit):
                 if k.startswith("stream_"):
                     replace_keys.add(k)
             if len(replace_keys) > 0:
-                ez.logger.warning(f"LSLInlet kwargs beginning with 'stream_' deprecated. Found {replace_keys}. "
-                                  f"See LSLInfo dataclass.")
+                ez.logger.warning(
+                    f"LSLInlet kwargs beginning with 'stream_' deprecated. Found {replace_keys}. "
+                    f"See LSLInfo dataclass."
+                )
                 for k in replace_keys:
                     kwargs[k[7:]] = kwargs.pop(k)
 
@@ -201,19 +206,26 @@ class LSLInletUnit(ez.Unit):
     async def initialize(self) -> None:
         # If name, type, and host are all provided, then create the StreamInfo directly and
         #  create the inlet directly from that info.
-        if all([_ is not None for _ in [
-            self.SETTINGS.info.name,
-            self.SETTINGS.info.type,
-            self.SETTINGS.info.channel_count,
-            self.SETTINGS.info.channel_format
-        ]]):
+        if all(
+            [
+                _ is not None
+                for _ in [
+                    self.SETTINGS.info.name,
+                    self.SETTINGS.info.type,
+                    self.SETTINGS.info.channel_count,
+                    self.SETTINGS.info.channel_format,
+                ]
+            ]
+        ):
             info = pylsl.StreamInfo(
                 name=self.SETTINGS.info.name,
                 type=self.SETTINGS.info.type,
                 channel_count=self.SETTINGS.info.channel_count,
-                channel_format=self.SETTINGS.info.channel_format
+                channel_format=self.SETTINGS.info.channel_format,
             )
-            self.STATE.inlet = pylsl.StreamInlet(info, max_chunklen=1, processing_flags=self.SETTINGS.processing_flags)
+            self.STATE.inlet = pylsl.StreamInlet(
+                info, max_chunklen=1, processing_flags=self.SETTINGS.processing_flags
+            )
         else:
             # Build the predicate string. This uses XPATH syntax and can filter on anything in the stream info. e.g.,
             # `"name='BioSemi'" or "type='EEG' and starts-with(name,'BioSemi') and count(info/desc/channel)=32"`
@@ -246,9 +258,7 @@ class LSLInletUnit(ez.Unit):
             results: list[pylsl.StreamInfo] = self.STATE.resolver.results()
             if len(results):
                 self.STATE.inlet = pylsl.StreamInlet(
-                    results[0],
-                    max_chunklen=1,
-                    processing_flags=pylsl.proc_ALL
+                    results[0], max_chunklen=1, processing_flags=pylsl.proc_ALL
                 )
             else:
                 await asyncio.sleep(0.5)
@@ -260,7 +270,9 @@ class LSLInletUnit(ez.Unit):
         n_ch = inlet_info.channel_count()
         if fmt in fmt2npdtype:
             dtype = fmt2npdtype[fmt]
-            n_buff = int(self.SETTINGS.local_buffer_dur * inlet_info.nominal_srate()) or 1000
+            n_buff = (
+                int(self.SETTINGS.local_buffer_dur * inlet_info.nominal_srate()) or 1000
+            )
             self._fetch_buffer = np.zeros((n_buff, n_ch), dtype=dtype)
         ch_labels = []
         chans = inlet_info.desc().child("channels")
@@ -277,10 +289,12 @@ class LSLInletUnit(ez.Unit):
             data=np.empty((0, n_ch)),
             dims=["time", "ch"],
             axes={
-                "time": AxisArray.Axis.TimeAxis(fs=fs if fs else 1.0),  # HACK: Use 1.0 for irregular rate.
-                "ch": AxisArray.Axis.SpaceAxis(labels=ch_labels)
+                "time": AxisArray.Axis.TimeAxis(
+                    fs=fs if fs else 1.0
+                ),  # HACK: Use 1.0 for irregular rate.
+                "ch": AxisArray.Axis.SpaceAxis(labels=ch_labels),
             },
-            key=inlet_info.name()
+            key=inlet_info.name(),
         )
 
         while self.clock_sync.count < 1000:
@@ -290,8 +304,7 @@ class LSLInletUnit(ez.Unit):
         while self.STATE.inlet is not None:
             if self._fetch_buffer is not None:
                 samples, timestamps = self.STATE.inlet.pull_chunk(
-                    max_samples=self._fetch_buffer.shape[0],
-                    dest_obj=self._fetch_buffer
+                    max_samples=self._fetch_buffer.shape[0], dest_obj=self._fetch_buffer
                 )
             else:
                 samples, timestamps = self.STATE.inlet.pull_chunk()
@@ -299,7 +312,11 @@ class LSLInletUnit(ez.Unit):
 
             # Attempt to update the clock offset (shared across all instances)
             if len(timestamps):
-                data = self._fetch_buffer[:len(timestamps)].copy() if samples is None else samples
+                data = (
+                    self._fetch_buffer[: len(timestamps)].copy()
+                    if samples is None
+                    else samples
+                )
                 if self.SETTINGS.use_arrival_time:
                     # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
                     t0 = time.time() - (timestamps[-1] - timestamps[0])
@@ -315,9 +332,9 @@ class LSLInletUnit(ez.Unit):
                                 **msg_template.axes,
                                 "time": replace(
                                     msg_template.axes["time"],
-                                    offset=t0 + (ts - timestamps[0])
-                                )
-                            }
+                                    offset=t0 + (ts - timestamps[0]),
+                                ),
+                            },
                         )
                         yield self.OUTPUT_SIGNAL, out_msg
                 else:
@@ -327,8 +344,8 @@ class LSLInletUnit(ez.Unit):
                         data=data,
                         axes={
                             **msg_template.axes,
-                            "time": replace(msg_template.axes["time"], offset=t0)
-                        }
+                            "time": replace(msg_template.axes["time"], offset=t0),
+                        },
                     )
                     yield self.OUTPUT_SIGNAL, out_msg
             else:

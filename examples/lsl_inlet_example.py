@@ -24,26 +24,22 @@ class LSLDemoSystem(ez.Collection):
         self.INLET.apply_settings(
             LSLInletSettings(
                 stream_name=self.SETTINGS.stream_name,
-                stream_type=self.SETTINGS.stream_type
+                stream_type=self.SETTINGS.stream_type,
             )
         )
         self.LOGGER.apply_settings(
             DebugLogSettings(
                 name=self.SETTINGS.logger_name,
-                max_length=self.SETTINGS.logger_max_length
+                max_length=self.SETTINGS.logger_max_length,
             )
         )
 
     def network(self) -> ez.NetworkDefinition:
-        return (
-            (self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT),
-        )
+        return ((self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT),)
 
 
 if __name__ == "__main__":
     # Run the websocket system
     system = LSLDemoSystem()
-    system.apply_settings(
-        LSLDemoSystemSettings(stream_name="", stream_type="EEG")
-    )
+    system.apply_settings(LSLDemoSystemSettings(stream_name="", stream_type="EEG"))
     ez.run(SYSTEM=system)

@@ -1,3 +1,7 @@
+"""
+These unit tests aren't really testable in a runner without a complicated setup with inlets and outlets.
+This code exists mostly to use during development and debugging.
+"""
 import os
 import json
 from pathlib import Path
@@ -12,7 +16,8 @@ from ezmsg.lsl.units import LSLInfo, LSLInletSettings, LSLInletUnit
 
 
 def test_inlet_init_defaults():
-    my_inlet = LSLInletUnit()
+    settings = LSLInletSettings(name="", type="")
+    _ = LSLInletUnit(settings)
     assert True
 
 
@@ -50,11 +55,9 @@ def test_inlet_init_with_settings():
 
     comps = {
         "SRC": LSLInletUnit(info=LSLInfo(name="BrainVision RDA", type="EEG")),
-        "SINK": AxarrReceiver(num_msgs=10_000, output_fn=file_path)
+        "SINK": AxarrReceiver(num_msgs=10_000, output_fn=file_path),
     }
-    conns = (
-        (comps["SRC"].OUTPUT_SIGNAL, comps["SINK"].INPUT_SIGNAL),
-    )
+    conns = ((comps["SRC"].OUTPUT_SIGNAL, comps["SINK"].INPUT_SIGNAL),)
     ez.run(components=comps, connections=conns)
 
     tvecs = []

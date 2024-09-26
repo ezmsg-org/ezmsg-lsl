@@ -9,7 +9,9 @@ class CustomAxis(AxisArray.Axis):
     labels: typing.List[str] = field(default_factory=lambda: [])
 
     @classmethod
-    def SpaceAxis(cls, labels: typing.List[str]):  # , locs: typing.Optional[npt.NDArray] = None):
+    def SpaceAxis(
+        cls, labels: typing.List[str]
+    ):  # , locs: typing.Optional[npt.NDArray] = None):
         return cls(unit="mm", labels=labels)
 
 

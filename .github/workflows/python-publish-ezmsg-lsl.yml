@@ -24,6 +24,3 @@ jobs:
 
       - name: Publish package distributions to PyPI
         run: uv publish
-#        uses: pypa/gh-action-pypi-publish@release/v1
-#        with:
-#          packages_dir: artifact/
