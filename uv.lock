@@ -107,7 +107,7 @@ wheels = [
 
 [[package]]
 name = "ezmsg-lsl"
-version = "0.2.2.dev0+g8a725f7.d20240920"
+version = "0.3.3.dev0+ga51258c.d20240926"
 source = { editable = "." }
 dependencies = [
     { name = "ezmsg" },
@@ -131,7 +131,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "ezmsg", specifier = ">=3.5.0" },
-    { name = "ezmsg-sigproc", marker = "extra == 'test'", git = "https://github.com/ezmsg-org/ezmsg-sigproc.git?branch=dev" },
+    { name = "ezmsg-sigproc", marker = "extra == 'test'", specifier = ">=1.3.2" },
     { name = "flake8", marker = "extra == 'test'", specifier = ">=7.1.1" },
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "pylsl", specifier = ">=1.16.2" },
@@ -144,13 +144,17 @@ dev = [{ name = "ruff", specifier = ">=0.6.6" }]
 
 [[package]]
 name = "ezmsg-sigproc"
-version = "1.2.5"
-source = { git = "https://github.com/ezmsg-org/ezmsg-sigproc.git?branch=dev#d19ca232cb30518b759efddd0882a892c8409416" }
+version = "1.3.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ezmsg" },
     { name = "numpy" },
     { name = "pywavelets" },
     { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a7/04/86a13528e13fa78c7b426e1613532e82fd8984c08e1ba8b4fb4fc178bafe/ezmsg_sigproc-1.3.2.tar.gz", hash = "sha256:094254dfa86531bec5f19f4927fe1fe777e26f6a345564919f277d51861d8b33", size = 101674 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/40/30/9e5eda7d3d73b6c93fd1a2be2bd7e8702bd5cdb6ba0b512da07b562db110/ezmsg_sigproc-1.3.2-py3-none-any.whl", hash = "sha256:2bdb3a7290acd5f09666690ae1be46c3df60634fad2668edad2ff4ef53431cf9", size = 51434 },
 ]
 
 [[package]]
