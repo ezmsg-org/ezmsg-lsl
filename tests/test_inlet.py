@@ -2,6 +2,7 @@
 These unit tests aren't really testable in a runner without a complicated setup with inlets and outlets.
 This code exists mostly to use during development and debugging.
 """
+
 import asyncio
 import json
 import os
@@ -36,7 +37,10 @@ class StreamSwitcher(ez.Unit):
             if switch_counter % 2 == 0:
                 yield self.OUTPUT_SETTINGS, LSLInletSettings(info=LSLInfo(type="ECoG"))
             else:
-                yield self.OUTPUT_SETTINGS, LSLInletSettings(info=LSLInfo(type="Markers"))
+                yield (
+                    self.OUTPUT_SETTINGS,
+                    LSLInletSettings(info=LSLInfo(type="Markers")),
+                )
             switch_counter += 1
             await asyncio.sleep(2)
 

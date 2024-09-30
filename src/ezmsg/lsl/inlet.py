@@ -177,11 +177,19 @@ class LSLInletUnit(ez.Unit):
             results: list[pylsl.StreamInfo] = self.STATE.resolver.results()
             for strm_info in results:
                 b_match = True
-                b_match = b_match and ((not self.SETTINGS.info.name) or strm_info.name() == self.SETTINGS.info.name)
-                b_match = b_match and ((not self.SETTINGS.info.type) or strm_info.type() == self.SETTINGS.info.type)
+                b_match = b_match and (
+                    (not self.SETTINGS.info.name)
+                    or strm_info.name() == self.SETTINGS.info.name
+                )
+                b_match = b_match and (
+                    (not self.SETTINGS.info.type)
+                    or strm_info.type() == self.SETTINGS.info.type
+                )
                 if b_match:
                     self.STATE.inlet = pylsl.StreamInlet(
-                        strm_info, max_chunklen=1, processing_flags=self.SETTINGS.processing_flags
+                        strm_info,
+                        max_chunklen=1,
+                        processing_flags=self.SETTINGS.processing_flags,
                     )
                     break
 
@@ -195,7 +203,8 @@ class LSLInletUnit(ez.Unit):
             if fmt in fmt2npdtype:
                 dtype = fmt2npdtype[fmt]
                 n_buff = (
-                        int(self.SETTINGS.local_buffer_dur * inlet_info.nominal_srate()) or 1000
+                    int(self.SETTINGS.local_buffer_dur * inlet_info.nominal_srate())
+                    or 1000
                 )
                 self._fetch_buffer = np.zeros((n_buff, n_ch), dtype=dtype)
             ch_labels = []

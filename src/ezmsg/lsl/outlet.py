@@ -77,4 +77,3 @@ class LSLOutletUnit(ez.Unit):
                 dat = np.moveaxis(dat, arr.dims.index("time"), 0)
 
             self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))
-
