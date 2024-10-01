@@ -26,6 +26,7 @@ fmt2npdtype = {
 class LSLInfo:
     name: str = ""
     type: str = ""
+    host: str = ""  # Use socket.gethostname() for local host.
     channel_count: typing.Optional[int] = None
     nominal_srate: float = 0.0
     channel_format: typing.Optional[str] = None
@@ -184,6 +185,10 @@ class LSLInletUnit(ez.Unit):
                 b_match = b_match and (
                     (not self.SETTINGS.info.type)
                     or strm_info.type() == self.SETTINGS.info.type
+                )
+                b_match = b_match and (
+                    (not self.SETTINGS.info.host)
+                    or strm_info.hostname() == self.SETTINGS.info.host
                 )
                 if b_match:
                     self.STATE.inlet = pylsl.StreamInlet(
