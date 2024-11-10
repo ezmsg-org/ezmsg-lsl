@@ -37,6 +37,7 @@ packages = ["src/ezmsg"]
 [tool.uv]
 dev-dependencies = [
     "ruff>=0.6.6",
+    "typer>=0.13.0",
 ]
 
 [tool.uv.sources]
