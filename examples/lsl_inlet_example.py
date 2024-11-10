@@ -1,8 +1,9 @@
 from typing import Optional
 
 import ezmsg.core as ez
-from ezmsg.lsl.units import LSLInletUnit, LSLInletSettings
+from ezmsg.lsl.units import LSLInletUnit, LSLInletSettings, LSLInfo
 from ezmsg.util.debuglog import DebugLog, DebugLogSettings
+import typer
 # from ezmsg.util.messagelogger import MessageLogger, MessageLoggerSettings
 
 
@@ -22,10 +23,10 @@ class LSLDemoSystem(ez.Collection):
 
     def configure(self) -> None:
         self.INLET.apply_settings(
-            LSLInletSettings(
-                stream_name=self.SETTINGS.stream_name,
-                stream_type=self.SETTINGS.stream_type,
-            )
+            LSLInletSettings(info=LSLInfo(
+                name=self.SETTINGS.stream_name,
+                type=self.SETTINGS.stream_type,
+            ))
         )
         self.LOGGER.apply_settings(
             DebugLogSettings(
@@ -38,8 +39,11 @@ class LSLDemoSystem(ez.Collection):
         return ((self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT),)
 
 
-if __name__ == "__main__":
-    # Run the websocket system
+def main(stream_name: str = "", stream_type: str = "EEG"):
     system = LSLDemoSystem()
-    system.apply_settings(LSLDemoSystemSettings(stream_name="", stream_type="EEG"))
+    system.apply_settings(LSLDemoSystemSettings(stream_name=stream_name, stream_type=stream_type))
     ez.run(SYSTEM=system)
+
+
+if __name__ == "__main__":
+    typer.run(main)
