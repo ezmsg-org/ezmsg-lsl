@@ -89,11 +89,12 @@ class ClockSync:
         dur_until_next = self.min_interval - dur_since_last
         if force or dur_until_next <= 0:
             offsets = []
-            for _ in range(burst):
-                if self.count % 2:
+            for ix, _ in enumerate(range(burst)):
+                if (self.count + ix) % 2:
                     y, x = time.time(), pylsl.local_clock()
                 else:
                     x, y = pylsl.local_clock(), time.time()
+                # TODO: Use adaptive linear fit instead of simple subtraction.
                 offsets.append(y - x)
                 self.last_update = y
                 await asyncio.sleep(0.001)
