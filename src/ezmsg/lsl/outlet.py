@@ -93,6 +93,10 @@ class LSLOutletUnit(ez.Unit):
             if arr.dims[0] != "time":
                 dat = np.moveaxis(dat, arr.dims.index("time"), 0)
 
+            if not dat.flags.c_contiguous or not dat.flags.writeable:
+                # TODO: When did this become necessary?
+                dat = np.ascontiguousarray(dat).copy()
+
             if fs == 0.0:
                 # TODO: Push sample-by-sample using provided timestamps after converting from time.time to LSL time
                 self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))
