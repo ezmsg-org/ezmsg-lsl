@@ -23,10 +23,12 @@ class LSLDemoSystem(ez.Collection):
 
     def configure(self) -> None:
         self.INLET.apply_settings(
-            LSLInletSettings(info=LSLInfo(
-                name=self.SETTINGS.stream_name,
-                type=self.SETTINGS.stream_type,
-            ))
+            LSLInletSettings(
+                info=LSLInfo(
+                    name=self.SETTINGS.stream_name,
+                    type=self.SETTINGS.stream_type,
+                )
+            )
         )
         self.LOGGER.apply_settings(
             DebugLogSettings(
@@ -41,7 +43,9 @@ class LSLDemoSystem(ez.Collection):
 
 def main(stream_name: str = "", stream_type: str = "EEG"):
     system = LSLDemoSystem()
-    system.apply_settings(LSLDemoSystemSettings(stream_name=stream_name, stream_type=stream_type))
+    system.apply_settings(
+        LSLDemoSystemSettings(stream_name=stream_name, stream_type=stream_type)
+    )
     ez.run(SYSTEM=system)
 
 
