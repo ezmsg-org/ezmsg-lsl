@@ -21,7 +21,7 @@ class LSLDemoSystemSettings(ez.Settings):
 
 
 class LSLDemoSystem(ez.Collection):
-    SETTINGS: LSLDemoSystemSettings
+    SETTINGS = LSLDemoSystemSettings
 
     EEG = EEGSynth()
     OUTLET = LSLOutletUnit()
