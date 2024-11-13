@@ -40,3 +40,6 @@ class ClockSync:
 
     def lsl2system(self, lsl_timestamp: float) -> float:
         return lsl_timestamp + self.offset
+
+    def system2lsl(self, system_timestamp: float) -> float:
+        return system_timestamp - self.offset

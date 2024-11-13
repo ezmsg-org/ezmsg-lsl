@@ -5,6 +5,8 @@ from ezmsg.util.messages.axisarray import AxisArray
 import numpy as np
 import pylsl
 
+from .util import ClockSync
+
 
 # Reproduce pylsl.string2fmt but add float64 for more familiar numpy usage
 string2fmt = {
@@ -46,12 +48,21 @@ class LSLOutletUnit(ez.Unit):
     SETTINGS = LSLOutletSettings
     STATE = LSLOutletState
 
+    # Share clock correction across all instances
+    clock_sync = ClockSync()
+
     async def initialize(self) -> None:
         self._stream_created = False
 
     def shutdown(self) -> None:
         del self.STATE.outlet
         self.STATE.outlet = None
+
+    @ez.task
+    async def clock_sync_task(self) -> None:
+        while True:
+            force = self.clock_sync.count < 1000
+            await self.clock_sync.update(force=force, burst=1000 if force else 4)
 
     @ez.subscriber(INPUT_SIGNAL)
     async def lsl_outlet(self, msg: AxisArray) -> None:
@@ -98,9 +109,8 @@ class LSLOutletUnit(ez.Unit):
                 dat = np.ascontiguousarray(dat).copy()
 
             if fs == pylsl.IRREGULAR_RATE:
-                for samp in dat:
-                    # TODO: Use timestamp of each sample, after converting from time.time to LSL time
-                    self.STATE.outlet.push_sample(samp.reshape(1, -1))
+                ts = msg.axes["time"].data
             else:
-                # TODO: Use timestamp of most recent sample, after converting from time.time to LSL time
-                self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))
+                ts = msg.axes["time"].value(dat.shape[0])
+            ts = self.clock_sync.system2lsl(ts)
+            self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1), timestamp=ts)
