@@ -10,6 +10,8 @@ import numpy as np
 import numpy.typing as npt
 import pylsl
 
+from .util import ClockSync
+
 
 fmt2npdtype = {
     pylsl.cf_double64: float,  # Prefer native type for float64
@@ -74,43 +76,6 @@ class LSLInletState(ez.State):
     resolver: typing.Optional[pylsl.ContinuousResolver] = None
     inlet: typing.Optional[pylsl.StreamInlet] = None
     clock_offset: float = 0.0
-
-
-class ClockSync:
-    def __init__(self, alpha: float = 0.1, min_interval: float = 0.5):
-        self.alpha = alpha
-        self.min_interval = min_interval
-
-        self.offset = 0.0
-        self.last_update = 0.0
-        self.count = 0
-
-    async def update(self, force: bool = False, burst: int = 4) -> None:
-        dur_since_last = time.time() - self.last_update
-        dur_until_next = self.min_interval - dur_since_last
-        if force or dur_until_next <= 0:
-            offsets = []
-            for ix, _ in enumerate(range(burst)):
-                if (self.count + ix) % 2:
-                    y, x = time.time(), pylsl.local_clock()
-                else:
-                    x, y = pylsl.local_clock(), time.time()
-                # TODO: Use adaptive linear fit instead of simple subtraction.
-                offsets.append(y - x)
-                self.last_update = y
-                await asyncio.sleep(0.001)
-            offset = np.mean(offsets)
-
-            if self.count > 0:
-                # Exponential decay smoothing
-                offset = (1 - self.alpha) * self.offset + self.alpha * offset
-            self.offset = offset
-            self.count += burst
-        else:
-            await asyncio.sleep(dur_until_next)
-
-    def convert_timestamp(self, lsl_timestamp: float) -> float:
-        return lsl_timestamp + self.offset
 
 
 class LSLInletUnit(ez.Unit):
@@ -227,7 +192,9 @@ class LSLInletUnit(ez.Unit):
             time_ax = (
                 AxisArray.TimeAxis(fs=fs)
                 if fs
-                else AxisArray.CoordinateAxis(data=np.array([]), dims=["time"])
+                else AxisArray.CoordinateAxis(
+                    data=np.array([]), dims=["time"], unit="s"
+                )
             )
             self._msg_template = AxisArray(
                 data=np.empty((0, n_ch)),
@@ -244,7 +211,7 @@ class LSLInletUnit(ez.Unit):
     async def initialize(self) -> None:
         self._reset_resolver()
         self._reset_inlet()
-        # TODO: Let the clock_sync task do its job at the beginning.
+        await self.clock_sync.update(force=True, burst=1000)
 
     def shutdown(self) -> None:
         if self.STATE.inlet is not None:
@@ -258,8 +225,7 @@ class LSLInletUnit(ez.Unit):
     @ez.task
     async def clock_sync_task(self) -> None:
         while True:
-            force = self.clock_sync.count < 1000
-            await self.clock_sync.update(force=force, burst=1000 if force else 4)
+            await self.clock_sync.update(force=False, burst=4)
 
     @ez.subscriber(INPUT_SETTINGS)
     async def on_settings(self, msg: LSLInletSettings) -> None:
@@ -300,20 +266,21 @@ class LSLInletUnit(ez.Unit):
                 )
 
                 if self.SETTINGS.use_arrival_time:
-                    # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
-                    t0 = time.time() - (timestamps[-1] - timestamps[0])
+                    timestamps = time.time() - (timestamps - timestamps[0])
                 else:
-                    t0 = self.clock_sync.convert_timestamp(timestamps[0])
+                    timestamps = self.clock_sync.lsl2system(timestamps)
 
                 if self.SETTINGS.info.nominal_srate <= 0.0:
                     # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
                     out_time_ax = replace(
                         self._msg_template.axes["time"],
-                        data=np.array(timestamps) + (t0 - timestamps[0]),
+                        data=np.array(timestamps),
                     )
                 else:
                     # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
-                    out_time_ax = replace(self._msg_template.axes["time"], offset=t0)
+                    out_time_ax = replace(
+                        self._msg_template.axes["time"], offset=timestamps[0]
+                    )
 
                 out_msg = replace(
                     self._msg_template,
