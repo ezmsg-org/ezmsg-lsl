@@ -64,7 +64,7 @@ class LSLOutletUnit(ez.Unit):
         while True:
             await self.clock_sync.update(force=False, burst=4)
 
-    @ez.subscriber(INPUT_SIGNAL)
+    @ez.subscriber(INPUT_SIGNAL, zero_copy=True)
     async def lsl_outlet(self, msg: AxisArray) -> None:
         if self.STATE.outlet is None:
             if isinstance(msg.axes["time"], AxisArray.LinearAxis):
@@ -103,8 +103,11 @@ class LSLOutletUnit(ez.Unit):
             if msg.dims[0] != "time":
                 dat = np.moveaxis(dat, msg.dims.index("time"), 0)
 
-            if not dat.flags.c_contiguous or not dat.flags.writeable:
-                # TODO: When did this become necessary?
+            if not dat.flags.c_contiguous:
+                dat = np.ascontiguousarray(dat)
+            if not dat.flags.writeable:
+                # If there is a shared-memory-hop before the LSL outlet then it has made
+                #  the numpy array non-writeable. We need to copy it to a new buffer.
                 dat = np.ascontiguousarray(dat).copy()
 
             if hasattr(msg.axes["time"], "data"):
