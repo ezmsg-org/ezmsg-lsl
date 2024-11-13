@@ -4,107 +4,77 @@ This code exists mostly to use during development and debugging.
 """
 
 import asyncio
-import json
-import os
 from pathlib import Path
 import tempfile
 import typing
 
 import numpy as np
-
+import pylsl
+import pytest
 import ezmsg.core as ez
 from ezmsg.util.messages.axisarray import AxisArray
+from ezmsg.util.messagelogger import MessageLogger
+from ezmsg.util.messagecodec import message_log
+from ezmsg.util.terminate import TerminateOnTotal
 
 from ezmsg.lsl.units import LSLInfo, LSLInletSettings, LSLInletUnit
 
 
 def test_inlet_init_defaults():
-    settings = LSLInletSettings(name="", type="")
+    settings = LSLInletSettings(info=LSLInfo(name="", type=""))
     _ = LSLInletUnit(settings)
     assert True
 
 
-class StreamSwitcher(ez.Unit):
-    STATE = ez.State
-    SETTINGS = ez.Settings
-    OUTPUT_SETTINGS = ez.OutputStream(LSLInletSettings)
-
-    @ez.publisher(OUTPUT_SETTINGS)
-    async def switch_stream(self) -> typing.AsyncGenerator:
-        switch_counter = 0
-
-        while True:
-            if switch_counter % 2 == 0:
-                yield self.OUTPUT_SETTINGS, LSLInletSettings(info=LSLInfo(type="ECoG"))
-            else:
-                yield (
-                    self.OUTPUT_SETTINGS,
-                    LSLInletSettings(info=LSLInfo(type="Markers")),
-                )
-            switch_counter += 1
-            await asyncio.sleep(2)
+async def dummy_outlet(rate: float = 100.0, n_chans: int = 8):
+    info = pylsl.StreamInfo(name="dummy", type="dummy", channel_count=n_chans, nominal_srate=rate)
+    outlet = pylsl.StreamOutlet(info)
+    eff_rate = rate or 100.0
+    n_interval = int(eff_rate / 10)
+    n_pushed = 0
+    t0 = pylsl.local_clock()
+    while True:
+        t_next = t0 + (n_pushed + n_interval) / (rate or 100.0)
+        t_now = pylsl.local_clock()
+        await asyncio.sleep(t_next - t_now)
+        data = np.random.random((n_interval, n_chans))
+        outlet.push_chunk(data)
+        n_pushed += n_interval
 
 
-class MessageReceiverSettings(ez.Settings):
-    num_msgs: int
-    output_fn: str
+class DummyOutletSettings(ez.Settings):
+    rate: float = 100.0
+    n_chans: int = 8
 
 
-class MessageReceiverState(ez.State):
-    num_received: int = 0
+class DummyOutlet(ez.Unit):
+    SETTINGS = DummyOutletSettings
+
+    @ez.task
+    async def run_dummy(self) -> None:
+        await dummy_outlet(rate=self.SETTINGS.rate, n_chans=self.SETTINGS.n_chans)
 
 
-class AxarrReceiver(ez.Unit):
-    STATE = MessageReceiverState
-    SETTINGS = MessageReceiverSettings
-    INPUT_SIGNAL = ez.InputStream(AxisArray)
-    OUTPUT_SETTINGS = ez.OutputStream(LSLInletSettings)
-
-    @ez.subscriber(INPUT_SIGNAL)
-    async def on_message(self, msg: AxisArray) -> None:
-        self.STATE.num_received += 1
-        try:
-            t_ax = msg.axes["time"]
-            tvec = np.arange(msg.data.shape[0]) * t_ax.gain + t_ax.offset
-            payload = {self.STATE.num_received: tvec.tolist()}
-            with open(self.SETTINGS.output_fn, "a") as output_file:
-                output_file.write(json.dumps(payload) + "\n")
-        except Exception as e:
-            print(f"Debug {e}")
-        if self.STATE.num_received == self.SETTINGS.num_msgs:
-            raise ez.NormalTermination
-
-
-def test_inlet_init_with_settings():
-    test_name = os.environ.get("PYTEST_CURRENT_TEST")
-    if test_name is None:
-        test_name = "test_inlet:test_inlet_init_with_settings na"
-    test_name = test_name.split(":")[-1].split(" ")[0]
+@pytest.mark.parametrize("rate", [100.0, 0.0])
+def test_inlet_system(rate: float):
+    n_messages = 20
     file_path = Path(tempfile.gettempdir())
-    file_path = file_path / Path(f"{test_name}.json")
+    file_path = file_path / Path("test_inlet_system.txt")
 
     comps = {
-        "SRC": LSLInletUnit(info=LSLInfo(name="BrainVision RDA", type="EEG")),
-        "SINK": AxarrReceiver(num_msgs=500, output_fn=file_path),
-        "FLIPFLOP": StreamSwitcher(),
+        "DUMMY": DummyOutlet(rate=rate, n_chans=8),
+        "SRC": LSLInletUnit(info=LSLInfo(name="dummy", type="dummy")),
+        "LOGGER": MessageLogger(output=file_path),
+        "TERM": TerminateOnTotal(total=n_messages)
     }
     conns = (
-        (comps["FLIPFLOP"].OUTPUT_SETTINGS, comps["SRC"].INPUT_SETTINGS),
-        (comps["SRC"].OUTPUT_SIGNAL, comps["SINK"].INPUT_SIGNAL),
+        (comps["SRC"].OUTPUT_SIGNAL, comps["LOGGER"].INPUT_MESSAGE),
+        (comps["LOGGER"].OUTPUT_MESSAGE, comps["TERM"].INPUT_MESSAGE),
     )
     ez.run(components=comps, connections=conns)
 
-    # tvecs = []
-    # with open(file_path, "r") as file:
-    #     for ix, line in enumerate(file.readlines()):
-    #         tmp = json.loads(line)
-    #         tvecs.append(tmp[str(ix + 1)])
-    # os.remove(str(file_path))
-    # tvec = np.hstack(tvecs)
-    #
-    # # counts, bins = np.histogram(np.diff(tvec), 20)
-    # assert np.max(np.diff(tvec)) < 0.003
+    messages: typing.List[AxisArray] = [_ for _ in message_log(file_path)]
+    file_path.unlink(missing_ok=True)
 
-
-if __name__ == "__main__":
-    test_inlet_init_with_settings()
+    # We merely verify that the messages are being sent to the logger.
+    assert len(messages) >= n_messages

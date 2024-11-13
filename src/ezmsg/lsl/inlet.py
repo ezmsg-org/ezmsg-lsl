@@ -192,7 +192,7 @@ class LSLInletUnit(ez.Unit):
             time_ax = (
                 AxisArray.TimeAxis(fs=fs)
                 if fs
-                else AxisArray.CoordinateAxis(data=np.array([]), dims=["time"])
+                else AxisArray.CoordinateAxis(data=np.array([]), dims=["time"], unit="s")
             )
             self._msg_template = AxisArray(
                 data=np.empty((0, n_ch)),
@@ -209,7 +209,7 @@ class LSLInletUnit(ez.Unit):
     async def initialize(self) -> None:
         self._reset_resolver()
         self._reset_inlet()
-        # TODO: Let the clock_sync task do its job at the beginning.
+        await self.clock_sync.update(force=True, burst=1000)
 
     def shutdown(self) -> None:
         if self.STATE.inlet is not None:
@@ -223,8 +223,7 @@ class LSLInletUnit(ez.Unit):
     @ez.task
     async def clock_sync_task(self) -> None:
         while True:
-            force = self.clock_sync.count < 1000
-            await self.clock_sync.update(force=force, burst=1000 if force else 4)
+            await self.clock_sync.update(force=False, burst=4)
 
     @ez.subscriber(INPUT_SETTINGS)
     async def on_settings(self, msg: LSLInletSettings) -> None:
@@ -265,20 +264,19 @@ class LSLInletUnit(ez.Unit):
                 )
 
                 if self.SETTINGS.use_arrival_time:
-                    # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
-                    t0 = time.time() - (timestamps[-1] - timestamps[0])
+                    timestamps = time.time() - (timestamps - timestamps[0])
                 else:
-                    t0 = self.clock_sync.lsl2system(timestamps[0])
+                    timestamps = self.clock_sync.lsl2system(timestamps)
 
                 if self.SETTINGS.info.nominal_srate <= 0.0:
                     # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
                     out_time_ax = replace(
                         self._msg_template.axes["time"],
-                        data=np.array(timestamps) + (t0 - timestamps[0]),
+                        data=np.array(timestamps),
                     )
                 else:
                     # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
-                    out_time_ax = replace(self._msg_template.axes["time"], offset=t0)
+                    out_time_ax = replace(self._msg_template.axes["time"], offset=timestamps[0])
 
                 out_msg = replace(
                     self._msg_template,
