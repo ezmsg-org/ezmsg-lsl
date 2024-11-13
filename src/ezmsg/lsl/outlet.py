@@ -1,10 +1,9 @@
 import typing
 
 import ezmsg.core as ez
+from ezmsg.util.messages.axisarray import AxisArray
 import numpy as np
 import pylsl
-
-from .util import AxisArray
 
 
 # Reproduce pylsl.string2fmt but add float64 for more familiar numpy usage
@@ -56,8 +55,13 @@ class LSLOutletUnit(ez.Unit):
 
     @ez.subscriber(INPUT_SIGNAL)
     async def lsl_outlet(self, arr: AxisArray) -> None:
+        fs = None
         if self.STATE.outlet is None:
-            fs = 1 / arr.axes["time"].gain
+            if isinstance(arr.axes["time"], AxisArray.LinearAxis):
+                fs = 1 / arr.axes["time"].gain
+            else:
+                # Coordinate axis because timestamps are irregular
+                fs = pylsl.IRREGULAR_RATE
             out_shape = [_[0] for _ in zip(arr.shape, arr.dims) if _[1] != "time"]
             out_size = int(np.prod(out_shape))
             info = pylsl.StreamInfo(
@@ -68,7 +72,20 @@ class LSLOutletUnit(ez.Unit):
                 channel_format=string2fmt[str(arr.data.dtype)],
                 source_id="",  # TODO: Generate a hash from name, type, channel_count, fs, fmt, other metadata...
             )
-            # TODO: if self.SETTINGS.map_file: Add channel labels (and locations?) to the info desc.
+            # Add channel labels to the info desc.
+            if "ch" in arr.axes and isinstance(
+                arr.axes["ch"], AxisArray.CoordinateAxis
+            ):
+                ch_labels = arr.axes["ch"].data
+                # TODO: or get ch_labels from self.SETTINGS.map_file
+                # TODO: if arr is multi-dim then construct labels by combining dims.
+                #  For now, labels only work if only output dims are "time", "ch"
+                if len(ch_labels) == out_size:
+                    chans = info.desc().append_child("channels")
+                    for ch in ch_labels:
+                        chan = chans.append_child("channel")
+                        chan.append_child_value("label", ch)
+                        # TODO: if self.SETTINGS.map_file: Add channel locations
             self.STATE.outlet = pylsl.StreamOutlet(info)
 
         if self.STATE.outlet is not None:
@@ -76,4 +93,12 @@ class LSLOutletUnit(ez.Unit):
             if arr.dims[0] != "time":
                 dat = np.moveaxis(dat, arr.dims.index("time"), 0)
 
-            self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))
+            if not dat.flags.c_contiguous or not dat.flags.writeable:
+                # TODO: When did this become necessary?
+                dat = np.ascontiguousarray(dat).copy()
+
+            if fs == 0.0:
+                # TODO: Push sample-by-sample using provided timestamps after converting from time.time to LSL time
+                self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))
+            else:
+                self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))

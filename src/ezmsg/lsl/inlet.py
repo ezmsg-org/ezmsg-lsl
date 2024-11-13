@@ -1,14 +1,14 @@
 import asyncio
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 import time
 import typing
 
 import ezmsg.core as ez
+from ezmsg.util.messages.axisarray import AxisArray
+from ezmsg.util.messages.util import replace
 import numpy as np
 import numpy.typing as npt
 import pylsl
-
-from .util import AxisArray
 
 
 fmt2npdtype = {
@@ -90,11 +90,12 @@ class ClockSync:
         dur_until_next = self.min_interval - dur_since_last
         if force or dur_until_next <= 0:
             offsets = []
-            for _ in range(burst):
-                if self.count % 2:
+            for ix, _ in enumerate(range(burst)):
+                if (self.count + ix) % 2:
                     y, x = time.time(), pylsl.local_clock()
                 else:
                     x, y = pylsl.local_clock(), time.time()
+                # TODO: Use adaptive linear fit instead of simple subtraction.
                 offsets.append(y - x)
                 self.last_update = y
                 await asyncio.sleep(0.001)
@@ -223,14 +224,19 @@ class LSLInletUnit(ez.Unit):
                 ch_labels.append(str(len(ch_labels) + 1))
             # Pre-allocate a message template.
             fs = inlet_info.nominal_srate()
+            time_ax = (
+                AxisArray.TimeAxis(fs=fs)
+                if fs
+                else AxisArray.CoordinateAxis(data=np.array([]), dims=["time"])
+            )
             self._msg_template = AxisArray(
                 data=np.empty((0, n_ch)),
                 dims=["time", "ch"],
                 axes={
-                    "time": AxisArray.Axis.TimeAxis(
-                        fs=fs if fs else 1.0
-                    ),  # HACK: Use 1.0 for irregular rate.
-                    "ch": AxisArray.Axis.SpaceAxis(labels=ch_labels),
+                    "time": time_ax,
+                    "ch": AxisArray.CoordinateAxis(
+                        data=np.array(ch_labels), dims=["ch"]
+                    ),
                 },
                 key=inlet_info.name(),
             )
@@ -292,36 +298,31 @@ class LSLInletUnit(ez.Unit):
                     if samples is None
                     else samples
                 )
+
                 if self.SETTINGS.use_arrival_time:
                     # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
                     t0 = time.time() - (timestamps[-1] - timestamps[0])
                 else:
                     t0 = self.clock_sync.convert_timestamp(timestamps[0])
+
                 if self.SETTINGS.info.nominal_srate <= 0.0:
-                    # Irregular rate streams need to be streamed sample-by-sample
-                    for ts, samp in zip(timestamps, data):
-                        out_msg = replace(
-                            self._msg_template,
-                            data=samp[None, ...],
-                            axes={
-                                **self._msg_template.axes,
-                                "time": replace(
-                                    self._msg_template.axes["time"],
-                                    offset=t0 + (ts - timestamps[0]),
-                                ),
-                            },
-                        )
-                        yield self.OUTPUT_SIGNAL, out_msg
-                else:
-                    # Regular-rate streams can go in a chunk
-                    out_msg = replace(
-                        self._msg_template,
-                        data=data,
-                        axes={
-                            **self._msg_template.axes,
-                            "time": replace(self._msg_template.axes["time"], offset=t0),
-                        },
+                    # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
+                    out_time_ax = replace(
+                        self._msg_template.axes["time"],
+                        data=np.array(timestamps) + (t0 - timestamps[0]),
                     )
-                    yield self.OUTPUT_SIGNAL, out_msg
+                else:
+                    # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
+                    out_time_ax = replace(self._msg_template.axes["time"], offset=t0)
+
+                out_msg = replace(
+                    self._msg_template,
+                    data=data,
+                    axes={
+                        **self._msg_template.axes,
+                        "time": out_time_ax,
+                    },
+                )
+                yield self.OUTPUT_SIGNAL, out_msg
             else:
                 await asyncio.sleep(0.001)
