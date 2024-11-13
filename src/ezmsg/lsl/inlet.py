@@ -192,7 +192,9 @@ class LSLInletUnit(ez.Unit):
             time_ax = (
                 AxisArray.TimeAxis(fs=fs)
                 if fs
-                else AxisArray.CoordinateAxis(data=np.array([]), dims=["time"], unit="s")
+                else AxisArray.CoordinateAxis(
+                    data=np.array([]), dims=["time"], unit="s"
+                )
             )
             self._msg_template = AxisArray(
                 data=np.empty((0, n_ch)),
@@ -276,7 +278,9 @@ class LSLInletUnit(ez.Unit):
                     )
                 else:
                     # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
-                    out_time_ax = replace(self._msg_template.axes["time"], offset=timestamps[0])
+                    out_time_ax = replace(
+                        self._msg_template.axes["time"], offset=timestamps[0]
+                    )
 
                 out_msg = replace(
                     self._msg_template,

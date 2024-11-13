@@ -2,6 +2,7 @@
 These unit tests aren't really testable in a runner without a complicated setup with inlets and outlets.
 This code exists mostly to use during development and debugging.
 """
+
 from pathlib import Path
 import tempfile
 import typing
@@ -16,8 +17,7 @@ from ezmsg.util.terminate import TerminateOnTotal
 from ezmsg.lsl.outlet import LSLOutletUnit
 
 
-def test_outlet_system(
-):
+def test_outlet_system():
     n_messages = 10
 
     file_path = Path(tempfile.gettempdir())
@@ -28,7 +28,7 @@ def test_outlet_system(
         "SYNTH": Oscillator(n_time=10, fs=1000, n_ch=32, dispatch_rate="ext_clock"),
         "OUTLET": LSLOutletUnit(stream_name="test_outlet_system", stream_type="EEG"),
         "LOGGER": MessageLogger(output=file_path),
-        "TERM": TerminateOnTotal(total=n_messages)
+        "TERM": TerminateOnTotal(total=n_messages),
     }
     conns = (
         (comps["CLOCK"].OUTPUT_CLOCK, comps["SYNTH"].INPUT_CLOCK),

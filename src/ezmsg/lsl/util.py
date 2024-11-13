@@ -7,7 +7,9 @@ import numpy.typing as npt
 import pylsl
 
 
-async def collect_timestamp_pairs(npairs: int = 4) -> typing.Tuple[np.ndarray, np.ndarray]:
+async def collect_timestamp_pairs(
+    npairs: int = 4,
+) -> typing.Tuple[np.ndarray, np.ndarray]:
     xs = []
     ys = []
     for _ in range(npairs):
@@ -65,21 +67,19 @@ class ClockSync:
             await asyncio.sleep(dur_until_next)
 
     @typing.overload
-    def lsl2system(self, lsl_timestamp: float) -> float:
-        ...
+    def lsl2system(self, lsl_timestamp: float) -> float: ...
     @typing.overload
-    def lsl2system(self, lsl_timestamp: npt.NDArray[float]) -> npt.NDArray[float]:
-        ...
+    def lsl2system(self, lsl_timestamp: npt.NDArray[float]) -> npt.NDArray[float]: ...
     def lsl2system(self, lsl_timestamp):
         # offset = system - lsl --> system = lsl + offset
         return lsl_timestamp + self._offset
 
     @typing.overload
-    def system2lsl(self, system_timestamp: float) -> float:
-        ...
+    def system2lsl(self, system_timestamp: float) -> float: ...
     @typing.overload
-    def system2lsl(self, system_timestamp: npt.NDArray[float]) -> npt.NDArray[float]:
-        ...
+    def system2lsl(
+        self, system_timestamp: npt.NDArray[float]
+    ) -> npt.NDArray[float]: ...
     def system2lsl(self, system_timestamp):
         # offset = system - lsl --> lsl = system - offset
         return system_timestamp - self._offset

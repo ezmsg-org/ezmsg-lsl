@@ -27,7 +27,9 @@ def test_inlet_init_defaults():
 
 
 async def dummy_outlet(rate: float = 100.0, n_chans: int = 8):
-    info = pylsl.StreamInfo(name="dummy", type="dummy", channel_count=n_chans, nominal_srate=rate)
+    info = pylsl.StreamInfo(
+        name="dummy", type="dummy", channel_count=n_chans, nominal_srate=rate
+    )
     outlet = pylsl.StreamOutlet(info)
     eff_rate = rate or 100.0
     n_interval = int(eff_rate / 10)
@@ -65,7 +67,7 @@ def test_inlet_system(rate: float):
         "DUMMY": DummyOutlet(rate=rate, n_chans=8),
         "SRC": LSLInletUnit(info=LSLInfo(name="dummy", type="dummy")),
         "LOGGER": MessageLogger(output=file_path),
-        "TERM": TerminateOnTotal(total=n_messages)
+        "TERM": TerminateOnTotal(total=n_messages),
     }
     conns = (
         (comps["SRC"].OUTPUT_SIGNAL, comps["LOGGER"].INPUT_MESSAGE),
