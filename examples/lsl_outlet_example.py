@@ -8,6 +8,7 @@ from typing import Tuple
 import ezmsg.core as ez
 from ezmsg.sigproc.synth import EEGSynth, EEGSynthSettings
 from ezmsg.lsl.units import LSLOutletUnit, LSLOutletSettings
+import typer
 
 
 class LSLDemoSystemSettings(ez.Settings):
@@ -48,10 +49,14 @@ class LSLDemoSystem(ez.Collection):
         return self.EEG, self.OUTLET
 
 
-if __name__ == "__main__":
+def main(stream_name: str = "ezmsg-EEGSynth", stream_type: str = "EEG"):
     # Run the websocket system
     system = LSLDemoSystem()
     system.apply_settings(
-        LSLDemoSystemSettings(stream_name="ezmsg-EEGSynth", stream_type="EEG")
+        LSLDemoSystemSettings(stream_name=stream_name, stream_type=stream_type)
     )
     ez.run(SYSTEM=system)
+
+
+if __name__ == "__main__":
+    typer.run(main)
