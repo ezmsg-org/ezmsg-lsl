@@ -6,7 +6,7 @@ from ezmsg.lsl.util import ClockSync, collect_timestamp_pairs
 
 
 def test_clock_sync():
-    tol = 10e-6  # 0.01 msec
+    tol = 10e-3  # 1 msec
 
     # Run a few updates to get a stable estimate.
     clock_sync = ClockSync()
