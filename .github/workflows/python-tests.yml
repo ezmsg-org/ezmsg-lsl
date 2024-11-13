@@ -33,9 +33,10 @@ jobs:
       - name: Install the project
         run: uv sync --all-extras --dev
 
-      - name: Lint
-        run:
-          uv tool run ruff check --output-format=github src
+      - name: Ruff check
+        uses: astral-sh/ruff-action@v1
+        with:
+          src: "./src"
 
       - name: Run tests
         run: uv run pytest tests
