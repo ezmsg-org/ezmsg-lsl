@@ -37,5 +37,5 @@ jobs:
         run:
           uv tool run ruff check --output-format=github src
 
-#      - name: Run tests
-#        run: uv run pytest tests
+      - name: Run tests
+        run: uv run pytest tests
