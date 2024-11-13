@@ -268,7 +268,7 @@ class LSLInletUnit(ez.Unit):
                     # time.time() gives us NOW, but we want the timestamp of the 0th sample in the chunk
                     t0 = time.time() - (timestamps[-1] - timestamps[0])
                 else:
-                    t0 = self.clock_sync.convert_timestamp(timestamps[0])
+                    t0 = self.clock_sync.lsl2system(timestamps[0])
 
                 if self.SETTINGS.info.nominal_srate <= 0.0:
                     # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.

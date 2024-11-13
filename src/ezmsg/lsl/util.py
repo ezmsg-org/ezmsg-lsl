@@ -38,5 +38,5 @@ class ClockSync:
         else:
             await asyncio.sleep(dur_until_next)
 
-    def convert_timestamp(self, lsl_timestamp: float) -> float:
+    def lsl2system(self, lsl_timestamp: float) -> float:
         return lsl_timestamp + self.offset
