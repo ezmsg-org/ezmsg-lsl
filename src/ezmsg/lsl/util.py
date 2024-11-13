@@ -50,7 +50,7 @@ class ClockSync:
         dur_since_last = time.time() - self._last_update
         dur_until_next = self.min_interval - dur_since_last
         if force or dur_until_next <= 0:
-            xs, ys = collect_timestamp_pairs(burst)
+            xs, ys = await collect_timestamp_pairs(burst)
             self.count += burst
             if burst > 0:
                 self._last_update = ys[-1]
