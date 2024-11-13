@@ -53,6 +53,7 @@ class LSLOutletUnit(ez.Unit):
 
     async def initialize(self) -> None:
         self._stream_created = False
+        await self.clock_sync.update(force=True, burst=1000)
 
     def shutdown(self) -> None:
         del self.STATE.outlet
@@ -61,12 +62,10 @@ class LSLOutletUnit(ez.Unit):
     @ez.task
     async def clock_sync_task(self) -> None:
         while True:
-            force = self.clock_sync.count < 1000
-            await self.clock_sync.update(force=force, burst=1000 if force else 4)
+            await self.clock_sync.update(force=False, burst=4)
 
     @ez.subscriber(INPUT_SIGNAL)
     async def lsl_outlet(self, msg: AxisArray) -> None:
-        fs = None
         if self.STATE.outlet is None:
             if isinstance(msg.axes["time"], AxisArray.LinearAxis):
                 fs = 1 / msg.axes["time"].gain
@@ -108,7 +107,7 @@ class LSLOutletUnit(ez.Unit):
                 # TODO: When did this become necessary?
                 dat = np.ascontiguousarray(dat).copy()
 
-            if fs == pylsl.IRREGULAR_RATE:
+            if hasattr(msg.axes["time"], "data"):
                 ts = msg.axes["time"].data
             else:
                 ts = msg.axes["time"].value(dat.shape[0])
