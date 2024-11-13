@@ -54,31 +54,31 @@ class LSLOutletUnit(ez.Unit):
         self.STATE.outlet = None
 
     @ez.subscriber(INPUT_SIGNAL)
-    async def lsl_outlet(self, arr: AxisArray) -> None:
+    async def lsl_outlet(self, msg: AxisArray) -> None:
         fs = None
         if self.STATE.outlet is None:
-            if isinstance(arr.axes["time"], AxisArray.LinearAxis):
-                fs = 1 / arr.axes["time"].gain
+            if isinstance(msg.axes["time"], AxisArray.LinearAxis):
+                fs = 1 / msg.axes["time"].gain
             else:
                 # Coordinate axis because timestamps are irregular
                 fs = pylsl.IRREGULAR_RATE
-            out_shape = [_[0] for _ in zip(arr.shape, arr.dims) if _[1] != "time"]
+            out_shape = [_[0] for _ in zip(msg.shape, msg.dims) if _[1] != "time"]
             out_size = int(np.prod(out_shape))
             info = pylsl.StreamInfo(
                 name=self.SETTINGS.stream_name,
                 type=self.SETTINGS.stream_type,
                 channel_count=out_size,
                 nominal_srate=fs,
-                channel_format=string2fmt[str(arr.data.dtype)],
+                channel_format=string2fmt[str(msg.data.dtype)],
                 source_id="",  # TODO: Generate a hash from name, type, channel_count, fs, fmt, other metadata...
             )
             # Add channel labels to the info desc.
-            if "ch" in arr.axes and isinstance(
-                arr.axes["ch"], AxisArray.CoordinateAxis
+            if "ch" in msg.axes and isinstance(
+                msg.axes["ch"], AxisArray.CoordinateAxis
             ):
-                ch_labels = arr.axes["ch"].data
+                ch_labels = msg.axes["ch"].data
                 # TODO: or get ch_labels from self.SETTINGS.map_file
-                # TODO: if arr is multi-dim then construct labels by combining dims.
+                # TODO: if msg is multi-dim then construct labels by combining dims.
                 #  For now, labels only work if only output dims are "time", "ch"
                 if len(ch_labels) == out_size:
                     chans = info.desc().append_child("channels")
@@ -89,16 +89,18 @@ class LSLOutletUnit(ez.Unit):
             self.STATE.outlet = pylsl.StreamOutlet(info)
 
         if self.STATE.outlet is not None:
-            dat = arr.data
-            if arr.dims[0] != "time":
-                dat = np.moveaxis(dat, arr.dims.index("time"), 0)
+            dat = msg.data
+            if msg.dims[0] != "time":
+                dat = np.moveaxis(dat, msg.dims.index("time"), 0)
 
             if not dat.flags.c_contiguous or not dat.flags.writeable:
                 # TODO: When did this become necessary?
                 dat = np.ascontiguousarray(dat).copy()
 
-            if fs == 0.0:
-                # TODO: Push sample-by-sample using provided timestamps after converting from time.time to LSL time
-                self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))
+            if fs == pylsl.IRREGULAR_RATE:
+                for samp in dat:
+                    # TODO: Use timestamp of each sample, after converting from time.time to LSL time
+                    self.STATE.outlet.push_sample(samp.reshape(1, -1))
             else:
+                # TODO: Use timestamp of most recent sample, after converting from time.time to LSL time
                 self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1))
