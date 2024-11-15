@@ -75,7 +75,6 @@ class LSLInletSettings(ez.Settings):
 class LSLInletState(ez.State):
     resolver: typing.Optional[pylsl.ContinuousResolver] = None
     inlet: typing.Optional[pylsl.StreamInlet] = None
-    clock_offset: float = 0.0
 
 
 class LSLInletUnit(ez.Unit):
@@ -94,9 +93,6 @@ class LSLInletUnit(ez.Unit):
     INPUT_SETTINGS = ez.InputStream(LSLInletSettings)
     OUTPUT_SIGNAL = ez.OutputStream(AxisArray)
 
-    # Share clock correction across all instances
-    clock_sync = ClockSync()
-
     def __init__(self, *args, **kwargs) -> None:
         """
         Handle deprecated arguments. Whereas previously stream_name and stream_type were in the
@@ -107,6 +103,7 @@ class LSLInletUnit(ez.Unit):
         super().__init__(*args, **kwargs)
         self._msg_template: typing.Optional[AxisArray] = None
         self._fetch_buffer: typing.Optional[npt.NDArray] = None
+        self._clock_sync = ClockSync()
 
     def _reset_resolver(self) -> None:
         self.STATE.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
@@ -211,7 +208,6 @@ class LSLInletUnit(ez.Unit):
     async def initialize(self) -> None:
         self._reset_resolver()
         self._reset_inlet()
-        await self.clock_sync.update(force=True, burst=1000)
 
     def shutdown(self) -> None:
         if self.STATE.inlet is not None:
@@ -221,11 +217,6 @@ class LSLInletUnit(ez.Unit):
         if self.STATE.resolver is not None:
             del self.STATE.resolver
         self.STATE.resolver = None
-
-    @ez.task
-    async def clock_sync_task(self) -> None:
-        while True:
-            await self.clock_sync.update(force=False, burst=4)
 
     @ez.subscriber(INPUT_SETTINGS)
     async def on_settings(self, msg: LSLInletSettings) -> None:
@@ -268,7 +259,7 @@ class LSLInletUnit(ez.Unit):
                 if self.SETTINGS.use_arrival_time:
                     timestamps = time.time() - (timestamps - timestamps[0])
                 else:
-                    timestamps = self.clock_sync.lsl2system(timestamps)
+                    timestamps = self._clock_sync.lsl2system(timestamps)
 
                 if self.SETTINGS.info.nominal_srate <= 0.0:
                     # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
