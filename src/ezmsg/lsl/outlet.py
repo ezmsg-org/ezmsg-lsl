@@ -48,21 +48,13 @@ class LSLOutletUnit(ez.Unit):
     SETTINGS = LSLOutletSettings
     STATE = LSLOutletState
 
-    # Share clock correction across all instances
-    clock_sync = ClockSync()
-
     async def initialize(self) -> None:
         self._stream_created = False
-        await self.clock_sync.update(force=True, burst=1000)
+        self._clock_sync = ClockSync()
 
     def shutdown(self) -> None:
         del self.STATE.outlet
         self.STATE.outlet = None
-
-    @ez.task
-    async def clock_sync_task(self) -> None:
-        while True:
-            await self.clock_sync.update(force=False, burst=4)
 
     @ez.subscriber(INPUT_SIGNAL, zero_copy=True)
     async def lsl_outlet(self, msg: AxisArray) -> None:

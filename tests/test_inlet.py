@@ -26,27 +26,10 @@ def test_inlet_init_defaults():
     assert True
 
 
-async def dummy_outlet(rate: float = 100.0, n_chans: int = 8):
-    info = pylsl.StreamInfo(
-        name="dummy", type="dummy", channel_count=n_chans, nominal_srate=rate
-    )
-    outlet = pylsl.StreamOutlet(info)
-    eff_rate = rate or 100.0
-    n_interval = int(eff_rate / 10)
-    n_pushed = 0
-    t0 = pylsl.local_clock()
-    while True:
-        t_next = t0 + (n_pushed + n_interval) / (rate or 100.0)
-        t_now = pylsl.local_clock()
-        await asyncio.sleep(t_next - t_now)
-        data = np.random.random((n_interval, n_chans))
-        outlet.push_chunk(data)
-        n_pushed += n_interval
-
-
 class DummyOutletSettings(ez.Settings):
     rate: float = 100.0
     n_chans: int = 8
+    running: bool = True
 
 
 class DummyOutlet(ez.Unit):
@@ -54,7 +37,21 @@ class DummyOutlet(ez.Unit):
 
     @ez.task
     async def run_dummy(self) -> None:
-        await dummy_outlet(rate=self.SETTINGS.rate, n_chans=self.SETTINGS.n_chans)
+        info = pylsl.StreamInfo(
+            name="dummy", type="dummy", channel_count=self.SETTINGS.n_chans, nominal_srate=self.SETTINGS.rate
+        )
+        outlet = pylsl.StreamOutlet(info)
+        eff_rate = self.SETTINGS.rate or 100.0
+        n_interval = int(eff_rate / 10)
+        n_pushed = 0
+        t0 = pylsl.local_clock()
+        while self.SETTINGS.running:
+            t_next = t0 + (n_pushed + n_interval) / (self.SETTINGS.rate or 100.0)
+            t_now = pylsl.local_clock()
+            await asyncio.sleep(t_next - t_now)
+            data = np.random.random((n_interval, self.SETTINGS.n_chans))
+            outlet.push_chunk(data)
+            n_pushed += n_interval
 
 
 @pytest.mark.parametrize("rate", [100.0, 0.0])
