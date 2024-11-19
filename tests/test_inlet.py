@@ -38,7 +38,10 @@ class DummyOutlet(ez.Unit):
     @ez.task
     async def run_dummy(self) -> None:
         info = pylsl.StreamInfo(
-            name="dummy", type="dummy", channel_count=self.SETTINGS.n_chans, nominal_srate=self.SETTINGS.rate
+            name="dummy",
+            type="dummy",
+            channel_count=self.SETTINGS.n_chans,
+            nominal_srate=self.SETTINGS.rate,
         )
         outlet = pylsl.StreamOutlet(info)
         eff_rate = self.SETTINGS.rate or 100.0
@@ -54,8 +57,34 @@ class DummyOutlet(ez.Unit):
             n_pushed += n_interval
 
 
+def test_inlet_collection():
+    """The primary purpose of this test is to verify that LSLInletUnit can be included in a collection."""
+
+    class LSLTestSystemSettings(ez.Settings):
+        stream_name: str = "dummy"
+        stream_type: str = "dummy"
+
+    class LSLTestSystem(ez.Collection):
+        SETTINGS: LSLTestSystemSettings
+
+        INLET = LSLInletUnit()
+
+        def configure(self) -> None:
+            self.INLET.apply_settings(
+                LSLInletSettings(
+                    LSLInfo(
+                        name=self.SETTINGS.stream_name, type=self.SETTINGS.stream_type
+                    )
+                )
+            )
+
+    # This next line raises an error if the ClockSync object runs its own thread.
+    system = LSLTestSystem()
+    assert system is not None
+
+
 @pytest.mark.parametrize("rate", [100.0, 0.0])
-def test_inlet_system(rate: float):
+def test_inlet_comps_conns(rate: float):
     n_messages = 20
     file_path = Path(tempfile.gettempdir())
     file_path = file_path / Path("test_inlet_system.txt")
