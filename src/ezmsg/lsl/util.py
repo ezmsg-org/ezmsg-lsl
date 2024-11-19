@@ -37,17 +37,18 @@ class ClockSync:
         if not hasattr(self, "_initialized"):
             self._alpha = alpha
             self._interval = min_interval
-            self._offset: typing.Optional[float] = None
 
-            self._running = True
-            self._initialized = True
+            # Do first burst so we have a real offset even before the thread starts.
+            xs, ys = collect_timestamp_pairs(100)
+            self._offset: float = np.mean(ys - xs)
+
             self._thread = threading.Thread(target=self._run)
             self._thread.daemon = True
+            self._initialized = True
+            self._running = True
             self._thread.start()
 
     def _run(self):
-        xs, ys = collect_timestamp_pairs(100)
-        self._offset = np.mean(ys - xs)
         while self._running:
             time.sleep(self._interval)
             xs, ys = collect_timestamp_pairs(4)

@@ -24,9 +24,11 @@ string2fmt = {
 class LSLOutletSettings(ez.Settings):
     stream_name: typing.Optional[str] = None
     stream_type: typing.Optional[str] = None
-    map_file: typing.Optional[str] = (
-        None  # Path to file containing a list of channel names and locations.
-    )
+    map_file: typing.Optional[str] = None
+    """
+    Path to file containing a list of channel names and locations.
+    This feature is experimental and not tested.
+    """
 
 
 class LSLOutletState(ez.State):
@@ -106,5 +108,5 @@ class LSLOutletUnit(ez.Unit):
                 ts = msg.axes["time"].data
             else:
                 ts = msg.axes["time"].value(dat.shape[0])
-            ts = self.clock_sync.system2lsl(ts)
+            ts = self._clock_sync.system2lsl(ts)
             self.STATE.outlet.push_chunk(dat.reshape(dat.shape[0], -1), timestamp=ts)
