@@ -1,3 +1,4 @@
+import asyncio
 import typing
 
 import ezmsg.core as ez
@@ -52,11 +53,18 @@ class LSLOutletUnit(ez.Unit):
 
     async def initialize(self) -> None:
         self._stream_created = False
-        self._clock_sync = ClockSync()
+        self._clock_sync = ClockSync(run_thread=False)
 
     def shutdown(self) -> None:
         del self.STATE.outlet
         self.STATE.outlet = None
+
+    @ez.task
+    async def update_clock(self) -> None:
+        while True:
+            if self.STATE.outlet is not None:
+                self._clock_sync.run_once()
+            await asyncio.sleep(0.1)
 
     @ez.subscriber(INPUT_SIGNAL, zero_copy=True)
     async def lsl_outlet(self, msg: AxisArray) -> None:
