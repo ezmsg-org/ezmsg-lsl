@@ -12,10 +12,13 @@ import numpy as np
 import pylsl
 import pytest
 import ezmsg.core as ez
+from ezmsg.sigproc.synth import Clock, ClockSettings
+from ezmsg.util.debuglog import DebugLog, DebugLogSettings
 from ezmsg.util.messages.axisarray import AxisArray
 from ezmsg.util.messagelogger import MessageLogger
 from ezmsg.util.messagecodec import message_log
-from ezmsg.util.terminate import TerminateOnTotal
+from ezmsg.util.terminate import TerminateOnTotal, TerminateOnTimeout, TerminateOnTimeoutSettings, \
+    TerminateOnTotalSettings
 
 from ezmsg.lsl.units import LSLInfo, LSLInletSettings, LSLInletUnit
 
@@ -65,9 +68,12 @@ def test_inlet_collection():
         stream_type: str = "dummy"
 
     class LSLTestSystem(ez.Collection):
-        SETTINGS: LSLTestSystemSettings
+        SETTINGS = LSLTestSystemSettings
 
         INLET = LSLInletUnit()
+        LOGGER = DebugLog()
+        CLOCK = Clock()
+        TERM = TerminateOnTotal()
 
         def configure(self) -> None:
             self.INLET.apply_settings(
@@ -77,10 +83,19 @@ def test_inlet_collection():
                     )
                 )
             )
+            self.LOGGER.apply_settings(DebugLogSettings(name="test_inlet_collection"))
+            self.CLOCK.apply_settings(ClockSettings(dispatch_rate=20.0))
+            self.TERM.apply_settings(TerminateOnTotalSettings(total=10))
+
+        def network(self) -> ez.NetworkDefinition:
+            return (
+                (self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT),
+                (self.CLOCK.OUTPUT_CLOCK, self.TERM.INPUT_MESSAGE),
+            )
 
     # This next line raises an error if the ClockSync object runs its own thread.
     system = LSLTestSystem()
-    assert system is not None
+    ez.run(SYSTEM=system)
 
 
 @pytest.mark.parametrize("rate", [100.0, 0.0])
