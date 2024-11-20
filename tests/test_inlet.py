@@ -70,9 +70,9 @@ def test_inlet_collection():
     class LSLTestSystem(ez.Collection):
         SETTINGS = LSLTestSystemSettings
 
+        DUMMY = DummyOutlet()
         INLET = LSLInletUnit()
         LOGGER = DebugLog()
-        CLOCK = Clock()
         TERM = TerminateOnTotal()
 
         def configure(self) -> None:
@@ -84,13 +84,12 @@ def test_inlet_collection():
                 )
             )
             self.LOGGER.apply_settings(DebugLogSettings(name="test_inlet_collection"))
-            self.CLOCK.apply_settings(ClockSettings(dispatch_rate=20.0))
             self.TERM.apply_settings(TerminateOnTotalSettings(total=10))
 
         def network(self) -> ez.NetworkDefinition:
             return (
                 (self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT),
-                (self.CLOCK.OUTPUT_CLOCK, self.TERM.INPUT_MESSAGE),
+                (self.LOGGER.OUTPUT, self.TERM.INPUT_MESSAGE),
             )
 
     # This next line raises an error if the ClockSync object runs its own thread.
