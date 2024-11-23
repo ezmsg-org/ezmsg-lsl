@@ -20,6 +20,10 @@ test = [
     "pytest-cov>=5.0.0",
     "pytest>=8.3.3",
 ]
+dev = [
+    "ruff>=0.6.6",
+    "typer>=0.13.0",
+]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -33,11 +37,3 @@ version-file = "src/ezmsg/lsl/__version__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ezmsg"]
-
-[tool.uv]
-dev-dependencies = [
-    "ruff>=0.6.6",
-    "typer>=0.13.0",
-]
-
-[tool.uv.sources]
