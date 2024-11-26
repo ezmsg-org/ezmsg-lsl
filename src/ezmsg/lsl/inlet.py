@@ -103,7 +103,7 @@ class LSLInletUnit(ez.Unit):
         super().__init__(*args, **kwargs)
         self._msg_template: typing.Optional[AxisArray] = None
         self._fetch_buffer: typing.Optional[npt.NDArray] = None
-        self._clock_sync = ClockSync()
+        self._clock_sync = ClockSync(run_thread=False)
 
     def _reset_resolver(self) -> None:
         self.STATE.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
@@ -217,6 +217,13 @@ class LSLInletUnit(ez.Unit):
         if self.STATE.resolver is not None:
             del self.STATE.resolver
         self.STATE.resolver = None
+
+    @ez.task
+    async def update_clock(self) -> None:
+        while True:
+            if self.STATE.inlet is not None:
+                self._clock_sync.run_once()
+            await asyncio.sleep(0.1)
 
     @ez.subscriber(INPUT_SETTINGS)
     async def on_settings(self, msg: LSLInletSettings) -> None:

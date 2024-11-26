@@ -33,27 +33,41 @@ class ClockSync:
                 cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, alpha: float = 0.1, min_interval: float = 0.1):
+    def __init__(self, alpha: float = 0.1, min_interval: float = 0.1, run_thread: bool = True):
         if not hasattr(self, "_initialized"):
             self._alpha = alpha
             self._interval = min_interval
-
+            self._initialized = True
+            self._last_time = time.time() - 1e9
+            self._running = False
+            self._thread: typing.Optional[threading.Thread] = None
             # Do first burst so we have a real offset even before the thread starts.
             xs, ys = collect_timestamp_pairs(100)
             self._offset: float = np.mean(ys - xs)
 
-            self._thread = threading.Thread(target=self._run)
-            self._thread.daemon = True
-            self._initialized = True
-            self._running = True
-            self._thread.start()
+            if run_thread:
+                self.start()
+
+    def run_once(self, n: int = 4, force: bool = False):
+        if force or (time.time() - self._last_time) > self._interval:
+            xs, ys = collect_timestamp_pairs(n)
+            offset = np.mean(ys - xs)
+            self._offset = (1 - self._alpha) * self._offset + self._alpha * offset
+            self._last_time = time.time()
 
     def _run(self):
         while self._running:
             time.sleep(self._interval)
-            xs, ys = collect_timestamp_pairs(4)
-            offset = np.mean(ys - xs)
-            self._offset = (1 - self._alpha) * self._offset + self._alpha * offset
+            self.run_once(4, True)
+
+    def start(self):
+        self._running = True
+        self._thread = threading.Thread(target=self._run)
+        self._thread.daemon = True
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
 
     @property
     def offset(self) -> float:
