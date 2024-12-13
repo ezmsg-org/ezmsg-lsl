@@ -119,7 +119,7 @@ wheels = [
 
 [[package]]
 name = "ezmsg-lsl"
-version = "1.2.2.dev9+gb163402.d20241213"
+version = "1.2.3.dev0+gc1f157f.d20241213"
 source = { editable = "." }
 dependencies = [
     { name = "ezmsg" },
@@ -145,7 +145,7 @@ requires-dist = [
     { name = "ezmsg-sigproc", marker = "extra == 'test'", specifier = ">=1.5.0" },
     { name = "flake8", marker = "extra == 'test'", specifier = ">=7.1.1" },
     { name = "numpy", specifier = ">=1.26.4" },
-    { name = "pylsl", specifier = ">=1.16.2" },
+    { name = "pylsl", specifier = ">=1.17.5" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.6" },
@@ -319,16 +319,16 @@ wheels = [
 
 [[package]]
 name = "pylsl"
-version = "1.17.5"
+version = "1.17.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/de/87/b7c28c4acf6ede0b6c923b28b2debd9722c95ca36b47334fbab2ab191e01/pylsl-1.17.5.tar.gz", hash = "sha256:e06b2c286435eaf3ff13d93f264e9d96fd10d46d6098a4a7c70651d70d0d26b4", size = 39850 }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/fd/2cb39e07d09f3aa40bc39d880adcc8bfa08fc9b8de993340e6a7555899f8/pylsl-1.17.6.tar.gz", hash = "sha256:8f3cea0c54a27785a43a27e9524f1dee885fe149f4703eed060168923b1695a3", size = 39856 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/f5/82d6f2a2dd7568437ed0200829c54060c9f91cdcb15043b3360708863f1c/pylsl-1.17.5-py2.py3-none-any.whl", hash = "sha256:98be581a16fb56d606628926230064e018e48ba1eedc6e39d9b1d33c2a9d9da7", size = 41772 },
-    { url = "https://files.pythonhosted.org/packages/e5/ba/be343cf29218f3c633188341bc6bf27c06a5d29ed3de1e52f73e5986c42a/pylsl-1.17.5-py2.py3-none-win32.whl", hash = "sha256:63e62407e2e55b99c4aac0a0fd9e0ae348906acac750b13989f9a7a1914c13f4", size = 293778 },
-    { url = "https://files.pythonhosted.org/packages/57/1f/1af04842d2d9143b1fed7817249b0e31684f10dbafd0f8eba0eb448e4f91/pylsl-1.17.5-py2.py3-none-win_amd64.whl", hash = "sha256:965a2ffc5421dbabfad33c3230b325a2af0fde961190556f4d4c86cebb88f4cb", size = 364212 },
+    { url = "https://files.pythonhosted.org/packages/9a/fa/38f3ec8ac9073e53c65d850d8d6f51cbb87dbfcb59db5215fe7c7584e6e5/pylsl-1.17.6-py2.py3-none-any.whl", hash = "sha256:78d935d3d944cd572464f6200fcdf3958866b2e3180dea3da83e43a19517acf5", size = 41775 },
+    { url = "https://files.pythonhosted.org/packages/5a/8d/0c8818c1a8aecc2a09d9f5df92b0bd321bd73f780c4928ccf0d5952951ad/pylsl-1.17.6-py2.py3-none-win32.whl", hash = "sha256:d9a68e86a073b59582b697c2baf1757b067da155e5fb017e30cefb7aa6d22f6d", size = 293781 },
+    { url = "https://files.pythonhosted.org/packages/92/a9/b24df99c2dcb128a404dff05a592aa457763d45274c793395919b9b120a6/pylsl-1.17.6-py2.py3-none-win_amd64.whl", hash = "sha256:a5ead3e28ccdd7a08a6523adc797d6f737a1e446f684a8bd4818d784b50d89ba", size = 364212 },
 ]
 
 [[package]]
