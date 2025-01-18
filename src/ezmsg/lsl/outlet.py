@@ -1,4 +1,5 @@
 import asyncio
+import time
 import typing
 
 import ezmsg.core as ez
@@ -29,6 +30,21 @@ class LSLOutletSettings(ez.Settings):
     """
     Path to file containing a list of channel names and locations.
     This feature is experimental and not tested.
+    """
+
+    use_message_timestamp: bool = True
+    """
+    Whether to push the data with the incoming timestamps (True, default) or to ignore the incoming timestamps
+    and push the data with the current pylsl.local_clock (False). When `True`, the incoming data
+    must have a "time" dimension.
+    """
+
+    assume_lsl_clock: bool = False
+    """
+    When `use_message_timestamp` is True, this indicates whether the incoming timestamps were already in the
+    lsl clock (see :obj:`LslInletSettings`). If False, the incoming timestamps are assumed to be in the system
+    time.time clock and are converted to the lsl clock.
+    Note: Ignored when use_message_timestamp is False.
     """
 
 
@@ -123,11 +139,15 @@ class OutletProcessor:
             #  the numpy array non-writeable. We need to copy it to a new buffer.
             dat = np.ascontiguousarray(dat).copy()
 
-        if hasattr(message.axes["time"], "data"):
-            ts = message.axes["time"].data
+        if self.settings.use_message_timestamp:
+            if hasattr(message.axes["time"], "data"):
+                ts = message.axes["time"].data
+            else:
+                ts = message.axes["time"].value(dat.shape[0])
+            if not self.settings.assume_lsl_clock:
+                ts = self._state.clock_sync.system2lsl(ts)
         else:
-            ts = message.axes["time"].value(dat.shape[0])
-        ts = self._state.clock_sync.system2lsl(ts)
+            ts = self._state.clock_sync.system2lsl(time.time())
         self._state.outlet.push_chunk(dat.reshape(dat.shape[0], -1), timestamp=ts)
 
     def __call__(self, message: AxisArray):
