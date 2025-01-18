@@ -58,123 +58,137 @@ def _sanitize_kwargs(kwargs: dict) -> dict:
 
 class LSLInletSettings(ez.Settings):
     info: LSLInfo = field(default_factory=LSLInfo)
+
     local_buffer_dur: float = 1.0
-    # Whether to ignore the LSL timestamps and use the time.time of the pull (True).
-    # If False (default), the LSL timestamps are used, but (optionally) corrected to time.time. See `use_lsl_clock`.
+
     use_arrival_time: bool = False
-    # Whether the AxisArray.Axis.offset should use LSL's clock (True) or time.time's clock (False -- default).
-    # This setting is ignored if `use_arrival_time` is True.
-    # Setting `use_arrival_time=False, use_lsl_clock=True` is the only way to accommodate playback rate != 1.0 and keep
-    # the axis .offset consistent with the original samplerate.
+    """
+    Whether to ignore the LSL timestamps and use the time.time of the pull (True).
+    If False (default), the LSL (send) timestamps are used.
+    Send times may be converted from LSL clock to time.time clock. See `use_lsl_clock`.
+    """
+
     use_lsl_clock: bool = False
+    """
+    Whether the AxisArray.Axis.offset should use LSL's clock (True) or time.time's clock (False -- default). 
+    """
+
     processing_flags: int = pylsl.proc_ALL
-    # The processing flags option passed to pylsl.StreamInlet. Default is proc_ALL which includes all flags.
-    # Many users will want to set this to pylsl.proc_clocksync to disable dejittering.
+    """
+    The processing flags option passed to pylsl.StreamInlet. Default is proc_ALL which includes all flags.
+    Many users will want to set this to pylsl.proc_clocksync to disable dejittering.
+    """
 
 
 class LSLInletState(ez.State):
     resolver: typing.Optional[pylsl.ContinuousResolver] = None
     inlet: typing.Optional[pylsl.StreamInlet] = None
+    clock_sync: ClockSync = ClockSync(run_thread=False)
+    msg_template: typing.Optional[AxisArray] = None
+    fetch_buffer: typing.Optional[npt.NDArray] = None
 
 
-class LSLInletUnit(ez.Unit):
-    """
-    Represents a node in a graph that creates an LSL inlet and
-    forwards the pulled data to the unit's output.
-
-    Args:
-        stream_name: The `name` of the created LSL outlet.
-        stream_type: The `type` of the created LSL outlet.
-    """
-
-    SETTINGS = LSLInletSettings
-    STATE = LSLInletState
-
-    INPUT_SETTINGS = ez.InputStream(LSLInletSettings)
-    OUTPUT_SIGNAL = ez.OutputStream(AxisArray)
-
-    def __init__(self, *args, **kwargs) -> None:
-        """
-        Handle deprecated arguments. Whereas previously stream_name and stream_type were in the
-        LSLInletSettings, now LSLInletSettings has info: LSLInfo which has fields for name, type,
-        among others.
-        """
+class LSLInletGenerator:
+    def __init__(self, *args, settings: typing.Optional[LSLInletSettings] = None, **kwargs):
         kwargs = _sanitize_kwargs(kwargs)
-        super().__init__(*args, **kwargs)
-        self._msg_template: typing.Optional[AxisArray] = None
-        self._fetch_buffer: typing.Optional[npt.NDArray] = None
-        self._clock_sync = ClockSync(run_thread=False)
+        if settings is None:
+            if len(args) > 0 and isinstance(args[0], LSLInletSettings):
+                settings = args[0]
+            elif len(args) > 0 or len(kwargs) > 0:
+                settings = LSLInletSettings(*args, **kwargs)
+            else:
+                settings = LSLInletSettings()
+        self._state: LSLInletState = LSLInletState()
+        self.settings = settings
+        self.shutdown()
+        self._reset_resolver()
+
+    def __iter__(self):
+        # self.shutdown() to reset?
+        return self
+
+    @property
+    def state(self) -> LSLInletState:
+        return self._state
 
     def _reset_resolver(self) -> None:
-        self.STATE.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
+        self._state.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
 
-    def _reset_inlet(self) -> None:
-        self._msg_template: typing.Optional[AxisArray] = None
-        self._fetch_buffer: typing.Optional[npt.NDArray] = None
-        if self.STATE.inlet is not None:
-            self.STATE.inlet.close_stream()
-            del self.STATE.inlet
-        self.STATE.inlet = None
+    def shutdown(self, shutdown_resolver: bool = True):
+        self._state.msg_template = None
+        self._state.fetch_buffer = None
+        if self._state.inlet is not None:
+            self._state.inlet.close_stream()
+            del self._state.inlet
+        self._state.inlet = None
+        if shutdown_resolver:
+            self._state.resolver = None
+
+    def _reset_inlet(self):
+        self.shutdown(shutdown_resolver=False)
+
         # If name, type, and host are all provided, then create the StreamInfo directly and
         #  create the inlet directly from that info.
         if all(
-            [
-                _ is not None
-                for _ in [
-                    self.SETTINGS.info.name,
-                    self.SETTINGS.info.type,
-                    self.SETTINGS.info.channel_count,
-                    self.SETTINGS.info.channel_format,
+                [
+                    _ is not None
+                    for _ in [
+                    self.settings.info.name,
+                    self.settings.info.type,
+                    self.settings.info.channel_count,
+                    self.settings.info.channel_format,
                 ]
-            ]
+                ]
         ):
             info = pylsl.StreamInfo(
-                name=self.SETTINGS.info.name,
-                type=self.SETTINGS.info.type,
-                channel_count=self.SETTINGS.info.channel_count,
-                channel_format=self.SETTINGS.info.channel_format,
+                name=self.settings.info.name,
+                type=self.settings.info.type,
+                channel_count=self.settings.info.channel_count,
+                channel_format=self.settings.info.channel_format,
             )
-            self.STATE.inlet = pylsl.StreamInlet(
-                info, max_chunklen=1, processing_flags=self.SETTINGS.processing_flags
+            self._state.inlet = pylsl.StreamInlet(
+                info, max_chunklen=1, processing_flags=self.settings.processing_flags
             )
-        else:
-            results: list[pylsl.StreamInfo] = self.STATE.resolver.results()
+        elif self._state.resolver is not None:
+            results: list[pylsl.StreamInfo] = self._state.resolver.results()
             for strm_info in results:
                 b_match = True
                 b_match = b_match and (
-                    (not self.SETTINGS.info.name)
-                    or strm_info.name() == self.SETTINGS.info.name
+                        (not self.settings.info.name)
+                        or strm_info.name() == self.settings.info.name
                 )
                 b_match = b_match and (
-                    (not self.SETTINGS.info.type)
-                    or strm_info.type() == self.SETTINGS.info.type
+                        (not self.settings.info.type)
+                        or strm_info.type() == self.settings.info.type
                 )
                 b_match = b_match and (
-                    (not self.SETTINGS.info.host)
-                    or strm_info.hostname() == self.SETTINGS.info.host
+                        (not self.settings.info.host)
+                        or strm_info.hostname() == self.settings.info.host
                 )
                 if b_match:
-                    self.STATE.inlet = pylsl.StreamInlet(
+                    self._state.inlet = pylsl.StreamInlet(
                         strm_info,
                         max_chunklen=1,
-                        processing_flags=self.SETTINGS.processing_flags,
+                        processing_flags=self.settings.processing_flags,
                     )
                     break
 
-        if self.STATE.inlet is not None:
-            self.STATE.inlet.open_stream()
-            inlet_info = self.STATE.inlet.info()
-            self.SETTINGS.info.nominal_srate = inlet_info.nominal_srate()
+        if self._state.inlet is not None:
+            self._state.inlet.open_stream()
+            inlet_info = self._state.inlet.info()
+            # It's bad practice to write directly to settings but here we
+            #  are filling in a value that was optional.
+            self.settings.info.nominal_srate = inlet_info.nominal_srate()
             # If possible, create a destination buffer for faster pulls
             fmt = inlet_info.channel_format()
             n_ch = inlet_info.channel_count()
             if fmt in fmt2npdtype:
                 dtype = fmt2npdtype[fmt]
                 n_buff = (
-                    int(self.SETTINGS.local_buffer_dur * inlet_info.nominal_srate())
-                    or 1000
+                        int(self.settings.local_buffer_dur * inlet_info.nominal_srate())
+                        or 1000
                 )
-                self._fetch_buffer = np.zeros((n_buff, n_ch), dtype=dtype)
+                self._state.fetch_buffer = np.zeros((n_buff, n_ch), dtype=dtype)
             ch_labels = []
             chans = inlet_info.desc().child("channels")
             if not chans.empty():
@@ -193,7 +207,7 @@ class LSLInletUnit(ez.Unit):
                     data=np.array([]), dims=["time"], unit="s"
                 )
             )
-            self._msg_template = AxisArray(
+            self._state.msg_template = AxisArray(
                 data=np.empty((0, n_ch)),
                 dims=["time", "ch"],
                 axes={
@@ -205,89 +219,118 @@ class LSLInletUnit(ez.Unit):
                 key=inlet_info.name(),
             )
 
+    def update_settings(self, new_settings: LSLInletSettings) -> None:
+        # The message may be full LSLInletSettings, a dict of settings, just the info, or dict of just info.
+        if isinstance(new_settings, dict):
+            # First make sure the info is in the right place.
+            msg = _sanitize_kwargs(new_settings)
+            # Next, convert to LSLInletSettings object.
+            msg = LSLInletSettings(**msg)
+        if msg != self.settings:
+            self._reset_resolver()
+            self._reset_inlet()
+
+    def __next__(self) -> typing.Optional[AxisArray]:
+        if self._state.inlet is None:
+            # Inlet not yet created, or recently destroyed because settings changed.
+            self._reset_inlet()
+            return None
+
+        if self._state.fetch_buffer is not None:
+            samples, timestamps = self._state.inlet.pull_chunk(
+                max_samples=self._state.fetch_buffer.shape[0], dest_obj=self._state.fetch_buffer
+            )
+        else:
+            samples, timestamps = self._state.inlet.pull_chunk()
+            samples = np.array(samples)
+
+        out_msg = self._state.msg_template
+        if len(timestamps):
+            data = (
+                self._state.fetch_buffer[: len(timestamps)].copy()
+                if samples is None
+                else samples
+            )
+
+            # `timestamps` is currently in the LSL clock stamped by the sender.
+            if self.settings.use_arrival_time:
+                # Drop the sender stamps; use "now"
+                timestamps = time.time() - (timestamps - timestamps[0])
+                if self.settings.use_lsl_clock:
+                    timestamps = self._state.clock_sync.system2lsl(timestamps)
+            elif not self.settings.use_lsl_clock:
+                # Keep the sender clock but convert to system time.
+                timestamps = self._state.clock_sync.lsl2system(timestamps)
+
+            if self.settings.info.nominal_srate <= 0.0:
+                # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
+                out_time_ax = replace(
+                    self._state.msg_template.axes["time"],
+                    data=np.array(timestamps),
+                )
+            else:
+                # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
+                out_time_ax = replace(
+                    self._state.msg_template.axes["time"], offset=timestamps[0]
+                )
+
+            out_msg = replace(
+                self._state.msg_template,
+                data=data,
+                axes={
+                    **self._state.msg_template.axes,
+                    "time": out_time_ax,
+                },
+            )
+        return out_msg
+
+
+class LSLInletUnitState(ez.State):
+    generator: typing.Optional[LSLInletGenerator] = None
+
+
+class LSLInletUnit(ez.Unit):
+    """
+    Represents a node in a graph that creates an LSL inlet and
+    forwards the pulled data to the unit's output.
+
+    Args:
+        stream_name: The `name` of the created LSL outlet.
+        stream_type: The `type` of the created LSL outlet.
+    """
+    SETTINGS = LSLInletSettings
+    STATE = LSLInletUnitState
+
+    INPUT_SETTINGS = ez.InputStream(LSLInletSettings)
+    OUTPUT_SIGNAL = ez.OutputStream(AxisArray)
+
     async def initialize(self) -> None:
-        self._reset_resolver()
-        self._reset_inlet()
+        self._create_generator()
+
+    def _create_generator(self):
+        self.STATE.generator = LSLInletGenerator(settings=self.SETTINGS)
 
     def shutdown(self) -> None:
-        if self.STATE.inlet is not None:
-            self.STATE.inlet.close_stream()
-            del self.STATE.inlet
-        self.STATE.inlet = None
-        if self.STATE.resolver is not None:
-            del self.STATE.resolver
-        self.STATE.resolver = None
+        self.STATE.generator.shutdown()
 
     @ez.task
     async def update_clock(self) -> None:
+        gen = self.STATE.generator
         while True:
-            if self.STATE.inlet is not None:
-                self._clock_sync.run_once()
+            if gen.state.inlet is not None:
+                gen.state.clock_sync.run_once()
             await asyncio.sleep(0.1)
 
     @ez.subscriber(INPUT_SETTINGS)
     async def on_settings(self, msg: LSLInletSettings) -> None:
-        # The message may be full LSLInletSettings, a dict of settings, just the info, or dict of just info.
-        if isinstance(msg, dict):
-            # First make sure the info is in the right place.
-            msg = _sanitize_kwargs(msg)
-            # Next, convert to LSLInletSettings object.
-            msg = LSLInletSettings(**msg)
-        if msg != self.SETTINGS:
-            self.apply_settings(msg)
-            self._reset_resolver()
-            self._reset_inlet()
+        self.apply_settings(msg)
+        self.STATE.generator.update_settings(msg)
 
     @ez.publisher(OUTPUT_SIGNAL)
     async def lsl_pull(self) -> typing.AsyncGenerator:
         while True:
-            if self.STATE.inlet is None:
-                # Inlet not yet created, or recently destroyed because settings changed.
-                self._reset_inlet()
-                await asyncio.sleep(0.1)
-                continue
-
-            if self._fetch_buffer is not None:
-                samples, timestamps = self.STATE.inlet.pull_chunk(
-                    max_samples=self._fetch_buffer.shape[0], dest_obj=self._fetch_buffer
-                )
-            else:
-                samples, timestamps = self.STATE.inlet.pull_chunk()
-                samples = np.array(samples)
-
-            # Attempt to update the clock offset (shared across all instances)
-            if len(timestamps):
-                data = (
-                    self._fetch_buffer[: len(timestamps)].copy()
-                    if samples is None
-                    else samples
-                )
-
-                if self.SETTINGS.use_arrival_time:
-                    timestamps = time.time() - (timestamps - timestamps[0])
-                else:
-                    timestamps = self._clock_sync.lsl2system(timestamps)
-
-                if self.SETTINGS.info.nominal_srate <= 0.0:
-                    # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
-                    out_time_ax = replace(
-                        self._msg_template.axes["time"],
-                        data=np.array(timestamps),
-                    )
-                else:
-                    # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
-                    out_time_ax = replace(
-                        self._msg_template.axes["time"], offset=timestamps[0]
-                    )
-
-                out_msg = replace(
-                    self._msg_template,
-                    data=data,
-                    axes={
-                        **self._msg_template.axes,
-                        "time": out_time_ax,
-                    },
-                )
+            out_msg = next(self.STATE.generator)
+            if out_msg is not None and np.prod(out_msg.data.shape) > 0:
                 yield self.OUTPUT_SIGNAL, out_msg
             else:
                 await asyncio.sleep(0.001)

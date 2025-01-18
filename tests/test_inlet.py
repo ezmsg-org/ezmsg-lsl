@@ -17,13 +17,46 @@ from ezmsg.util.messagelogger import MessageLogger, MessageLoggerSettings
 from ezmsg.util.messagecodec import message_log
 from ezmsg.util.terminate import TerminateOnTotal, TerminateOnTotalSettings
 
-from ezmsg.lsl.units import LSLInfo, LSLInletSettings, LSLInletUnit
+from ezmsg.lsl.inlet import LSLInfo, LSLInletSettings, LSLInletGenerator, LSLInletUnit
 
 
 def test_inlet_init_defaults():
     settings = LSLInletSettings(info=LSLInfo(name="", type=""))
     _ = LSLInletUnit(settings)
     assert True
+
+
+def test_inlet_generator():
+    """
+    Test the inlet generator object without invoking ezmsg.
+    """
+    rate = 32.0
+    nch = 8
+    dummy_out_info = pylsl.StreamInfo(
+        name="dummy",
+        type="dummy",
+        channel_count=nch,
+        nominal_srate=rate,
+        channel_format=pylsl.cf_float32,
+    )
+    outlet = pylsl.StreamOutlet(dummy_out_info)
+    state = {"pushed": 0}
+    def step_outlet(n_interval: int = 10):
+        dummy_data = np.arange(state["pushed"], state["pushed"] + n_interval)[:, None] / rate + np.zeros((1, nch))
+        outlet.push_chunk(dummy_data.astype(np.float32))
+        state["pushed"] += n_interval
+
+    gen = LSLInletGenerator(info=LSLInfo(name="dummy", type="dummy"))
+    counter = 0
+    for msg in gen:
+        step_outlet()
+        if msg is None or np.prod(msg.data.shape) == 0:
+            continue
+        assert msg.data.shape[1] == nch
+        assert not np.any(msg.data - msg.data[:, :1])
+        counter += 1
+        if counter > 10:
+            break
 
 
 class DummyOutletSettings(ez.Settings):
