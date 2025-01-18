@@ -12,13 +12,10 @@ import numpy as np
 import pylsl
 import pytest
 import ezmsg.core as ez
-from ezmsg.sigproc.synth import Clock, ClockSettings
-from ezmsg.util.debuglog import DebugLog, DebugLogSettings
 from ezmsg.util.messages.axisarray import AxisArray
-from ezmsg.util.messagelogger import MessageLogger
+from ezmsg.util.messagelogger import MessageLogger, MessageLoggerSettings
 from ezmsg.util.messagecodec import message_log
-from ezmsg.util.terminate import TerminateOnTotal, TerminateOnTimeout, TerminateOnTimeoutSettings, \
-    TerminateOnTotalSettings
+from ezmsg.util.terminate import TerminateOnTotal, TerminateOnTotalSettings
 
 from ezmsg.lsl.units import LSLInfo, LSLInletSettings, LSLInletUnit
 
@@ -45,6 +42,7 @@ class DummyOutlet(ez.Unit):
             type="dummy",
             channel_count=self.SETTINGS.n_chans,
             nominal_srate=self.SETTINGS.rate,
+            channel_format=pylsl.cf_float32,
         )
         outlet = pylsl.StreamOutlet(info)
         eff_rate = self.SETTINGS.rate or 100.0
@@ -52,16 +50,21 @@ class DummyOutlet(ez.Unit):
         n_pushed = 0
         t0 = pylsl.local_clock()
         while self.SETTINGS.running:
-            t_next = t0 + (n_pushed + n_interval) / (self.SETTINGS.rate or 100.0)
+            t_next = t0 + (n_pushed + n_interval) / eff_rate
             t_now = pylsl.local_clock()
             await asyncio.sleep(t_next - t_now)
-            data = np.random.random((n_interval, self.SETTINGS.n_chans))
-            outlet.push_chunk(data)
+            data_offset = n_pushed / eff_rate
+            data = np.arange(n_interval)[:, None] / eff_rate + data_offset
+            data = data + np.zeros((1, self.SETTINGS.n_chans))  # Expand channels dim
+            outlet.push_chunk(data.astype(np.float32))
             n_pushed += n_interval
 
 
 def test_inlet_collection():
     """The primary purpose of this test is to verify that LSLInletUnit can be included in a collection."""
+    file_path = Path(tempfile.gettempdir())
+    file_path = file_path / Path("test_inlet_collection.txt")
+    file_path.unlink(missing_ok=True)
 
     class LSLTestSystemSettings(ez.Settings):
         stream_name: str = "dummy"
@@ -72,10 +75,11 @@ def test_inlet_collection():
 
         DUMMY = DummyOutlet()
         INLET = LSLInletUnit()
-        LOGGER = DebugLog()
+        LOGGER = MessageLogger()
         TERM = TerminateOnTotal()
 
         def configure(self) -> None:
+            self.DUMMY.apply_settings(DummyOutletSettings(rate=100.0, n_chans=8))
             self.INLET.apply_settings(
                 LSLInletSettings(
                     LSLInfo(
@@ -83,18 +87,28 @@ def test_inlet_collection():
                     )
                 )
             )
-            self.LOGGER.apply_settings(DebugLogSettings(name="test_inlet_collection"))
+            self.LOGGER.apply_settings(MessageLoggerSettings(output=file_path))
             self.TERM.apply_settings(TerminateOnTotalSettings(total=10))
 
         def network(self) -> ez.NetworkDefinition:
             return (
-                (self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT),
-                (self.LOGGER.OUTPUT, self.TERM.INPUT_MESSAGE),
+
+                (self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT_MESSAGE),
+                (self.LOGGER.OUTPUT_MESSAGE, self.TERM.INPUT_MESSAGE),
             )
 
     # This next line raises an error if the ClockSync object runs its own thread.
     system = LSLTestSystem()
     ez.run(SYSTEM=system)
+    messages: typing.List[AxisArray] = [_ for _ in message_log(file_path)]
+    file_path.unlink(missing_ok=True)
+    assert len(messages) >= 10
+    cat_messages = AxisArray.concatenate(*messages, dim="time")
+    # Data are repeated across channels. Subtracting ch0 from all chans should yield an array of zeros.
+    assert not np.any(cat_messages.data - cat_messages.data[:, :1])
+    # Data are incrementing by 1/100.0. Check we aren't missing any.
+    samp_steps = np.diff(cat_messages.data[:, 0])
+    assert np.allclose(samp_steps, np.ones_like(samp_steps) / 100)
 
 
 @pytest.mark.parametrize("rate", [100.0, 0.0])
