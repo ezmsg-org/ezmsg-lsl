@@ -33,7 +33,9 @@ class ClockSync:
                 cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self, alpha: float = 0.1, min_interval: float = 0.1, run_thread: bool = True):
+    def __init__(
+        self, alpha: float = 0.1, min_interval: float = 0.1, run_thread: bool = True
+    ):
         if not hasattr(self, "_initialized"):
             self._alpha = alpha
             self._interval = min_interval
@@ -75,12 +77,10 @@ class ClockSync:
             return self._offset
 
     @typing.overload
-    def lsl2system(self, lsl_timestamp: float) -> float:
-        ...
+    def lsl2system(self, lsl_timestamp: float) -> float: ...
 
     @typing.overload
-    def lsl2system(self, lsl_timestamp: npt.NDArray[float]) -> npt.NDArray[float]:
-        ...
+    def lsl2system(self, lsl_timestamp: npt.NDArray[float]) -> npt.NDArray[float]: ...
 
     def lsl2system(self, lsl_timestamp):
         # offset = system - lsl --> system = lsl + offset
@@ -88,14 +88,12 @@ class ClockSync:
             return lsl_timestamp + self._offset
 
     @typing.overload
-    def system2lsl(self, system_timestamp: float) -> float:
-        ...
+    def system2lsl(self, system_timestamp: float) -> float: ...
 
     @typing.overload
     def system2lsl(
-            self, system_timestamp: npt.NDArray[float]
-    ) -> npt.NDArray[float]:
-        ...
+        self, system_timestamp: npt.NDArray[float]
+    ) -> npt.NDArray[float]: ...
 
     def system2lsl(self, system_timestamp):
         # offset = system - lsl --> lsl = system - offset

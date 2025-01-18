@@ -89,7 +89,9 @@ class LSLInletState(ez.State):
 
 
 class LSLInletGenerator:
-    def __init__(self, *args, settings: typing.Optional[LSLInletSettings] = None, **kwargs):
+    def __init__(
+        self, *args, settings: typing.Optional[LSLInletSettings] = None, **kwargs
+    ):
         kwargs = _sanitize_kwargs(kwargs)
         if settings is None:
             if len(args) > 0 and isinstance(args[0], LSLInletSettings):
@@ -130,15 +132,15 @@ class LSLInletGenerator:
         # If name, type, and host are all provided, then create the StreamInfo directly and
         #  create the inlet directly from that info.
         if all(
-                [
-                    _ is not None
-                    for _ in [
+            [
+                _ is not None
+                for _ in [
                     self.settings.info.name,
                     self.settings.info.type,
                     self.settings.info.channel_count,
                     self.settings.info.channel_format,
                 ]
-                ]
+            ]
         ):
             info = pylsl.StreamInfo(
                 name=self.settings.info.name,
@@ -154,16 +156,16 @@ class LSLInletGenerator:
             for strm_info in results:
                 b_match = True
                 b_match = b_match and (
-                        (not self.settings.info.name)
-                        or strm_info.name() == self.settings.info.name
+                    (not self.settings.info.name)
+                    or strm_info.name() == self.settings.info.name
                 )
                 b_match = b_match and (
-                        (not self.settings.info.type)
-                        or strm_info.type() == self.settings.info.type
+                    (not self.settings.info.type)
+                    or strm_info.type() == self.settings.info.type
                 )
                 b_match = b_match and (
-                        (not self.settings.info.host)
-                        or strm_info.hostname() == self.settings.info.host
+                    (not self.settings.info.host)
+                    or strm_info.hostname() == self.settings.info.host
                 )
                 if b_match:
                     self._state.inlet = pylsl.StreamInlet(
@@ -185,8 +187,8 @@ class LSLInletGenerator:
             if fmt in fmt2npdtype:
                 dtype = fmt2npdtype[fmt]
                 n_buff = (
-                        int(self.settings.local_buffer_dur * inlet_info.nominal_srate())
-                        or 1000
+                    int(self.settings.local_buffer_dur * inlet_info.nominal_srate())
+                    or 1000
                 )
                 self._state.fetch_buffer = np.zeros((n_buff, n_ch), dtype=dtype)
             ch_labels = []
@@ -238,7 +240,8 @@ class LSLInletGenerator:
 
         if self._state.fetch_buffer is not None:
             samples, timestamps = self._state.inlet.pull_chunk(
-                max_samples=self._state.fetch_buffer.shape[0], dest_obj=self._state.fetch_buffer
+                max_samples=self._state.fetch_buffer.shape[0],
+                dest_obj=self._state.fetch_buffer,
             )
         else:
             samples, timestamps = self._state.inlet.pull_chunk()
@@ -298,6 +301,7 @@ class LSLInletUnit(ez.Unit):
         stream_name: The `name` of the created LSL outlet.
         stream_type: The `type` of the created LSL outlet.
     """
+
     SETTINGS = LSLInletSettings
     STATE = LSLInletUnitState
 

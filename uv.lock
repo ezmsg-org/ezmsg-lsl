@@ -119,7 +119,7 @@ wheels = [
 
 [[package]]
 name = "ezmsg-lsl"
-version = "1.2.3.dev0+gc1f157f.d20241213"
+version = "1.2.4.dev4+g7bee0b1.d20250118"
 source = { editable = "." }
 dependencies = [
     { name = "ezmsg" },
@@ -145,7 +145,7 @@ requires-dist = [
     { name = "ezmsg-sigproc", marker = "extra == 'test'", specifier = ">=1.5.0" },
     { name = "flake8", marker = "extra == 'test'", specifier = ">=7.1.1" },
     { name = "numpy", specifier = ">=1.26.4" },
-    { name = "pylsl", specifier = ">=1.17.5" },
+    { name = "pylsl", specifier = ">=1.17.6" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.6" },

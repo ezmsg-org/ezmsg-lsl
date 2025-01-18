@@ -41,8 +41,11 @@ def test_inlet_generator():
     )
     outlet = pylsl.StreamOutlet(dummy_out_info)
     state = {"pushed": 0}
+
     def step_outlet(n_interval: int = 10):
-        dummy_data = np.arange(state["pushed"], state["pushed"] + n_interval)[:, None] / rate + np.zeros((1, nch))
+        dummy_data = np.arange(state["pushed"], state["pushed"] + n_interval)[
+            :, None
+        ] / rate + np.zeros((1, nch))
         outlet.push_chunk(dummy_data.astype(np.float32))
         state["pushed"] += n_interval
 
@@ -125,7 +128,6 @@ def test_inlet_collection():
 
         def network(self) -> ez.NetworkDefinition:
             return (
-
                 (self.INLET.OUTPUT_SIGNAL, self.LOGGER.INPUT_MESSAGE),
                 (self.LOGGER.OUTPUT_MESSAGE, self.TERM.INPUT_MESSAGE),
             )
