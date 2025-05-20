@@ -31,7 +31,7 @@ def test_outlet_system():
         "TERM": TerminateOnTotal(total=n_messages),
     }
     conns = (
-        (comps["CLOCK"].OUTPUT_CLOCK, comps["SYNTH"].INPUT_CLOCK),
+        (comps["CLOCK"].OUTPUT_SIGNAL, comps["SYNTH"].INPUT_SIGNAL),
         (comps["SYNTH"].OUTPUT_SIGNAL, comps["OUTLET"].INPUT_SIGNAL),
         (comps["SYNTH"].OUTPUT_SIGNAL, comps["LOGGER"].INPUT_MESSAGE),
         (comps["LOGGER"].OUTPUT_MESSAGE, comps["TERM"].INPUT_MESSAGE),
