@@ -13,16 +13,27 @@ dependencies = [
 ]
 dynamic = ["version"]
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [
+    {include-group = "lint"},
+    {include-group = "test"},
+    "typer>=0.13.0",
+]
+lint = [
+    "ruff>=0.12.9",
+]
 test = [
     "flake8>=7.1.1",
     "pytest-cov>=5.0.0",
     "pytest>=8.3.3",
     "ezmsg-sigproc>=2.0.0",
 ]
-dev = [
-    "ruff>=0.6.6",
-    "typer>=0.13.0",
+docs = [
+  "sphinx>=7.0",
+  "sphinx-autodoc-typehints",
+  "sphinx-copybutton",
+  "pydata-sphinx-theme",
+  "myst-parser",
 ]
 
 [build-system]
