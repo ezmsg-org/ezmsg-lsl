@@ -17,6 +17,7 @@ string2fmt = {
     "double64": pylsl.cf_double64,
     "float64": pylsl.cf_double64,
     "string": pylsl.cf_string,
+    "object": pylsl.cf_string,
     "int32": pylsl.cf_int32,
     "int16": pylsl.cf_int16,
     "int8": pylsl.cf_int8,
