@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import time
 import typing
 
@@ -21,6 +22,25 @@ string2fmt = {
     "int8": pylsl.cf_int8,
     "int64": pylsl.cf_int64,
 }
+
+
+def generate_source_id(
+    name: typing.Optional[str],
+    stream_type: typing.Optional[str],
+    channel_count: int,
+    nominal_srate: float,
+    channel_format: str,
+) -> str:
+    """Generate a stable source_id hash from stream metadata."""
+    components = (
+        name or "",
+        stream_type or "",
+        str(channel_count),
+        f"{nominal_srate:.6f}",
+        channel_format,
+    )
+    combined = "|".join(components)
+    return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
 class LSLOutletSettings(ez.Settings):
@@ -106,13 +126,21 @@ class OutletProcessor:
             fs = 1 / message.axes["time"].gain
         out_shape = [_[0] for _ in zip(message.shape, message.dims) if _[1] != "time"]
         out_size = int(np.prod(out_shape))
+        channel_format = str(message.data.dtype)
+        source_id = generate_source_id(
+            name=self.settings.stream_name,
+            stream_type=self.settings.stream_type,
+            channel_count=out_size,
+            nominal_srate=fs,
+            channel_format=channel_format,
+        )
         info = pylsl.StreamInfo(
             name=self.settings.stream_name,
             type=self.settings.stream_type,
             channel_count=out_size,
             nominal_srate=fs,
-            channel_format=string2fmt[str(message.data.dtype)],
-            source_id="",  # TODO: Generate a hash from name, type, channel_count, fs, fmt, other metadata...
+            channel_format=string2fmt[channel_format],
+            source_id="ezmsg-" + source_id,
         )
         # Add channel labels to the info desc.
         if "ch" in message.axes and isinstance(
