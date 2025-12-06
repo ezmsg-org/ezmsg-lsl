@@ -180,7 +180,14 @@ class OutletProcessor:
                 ts = self._state.clock_sync.system2lsl(ts)
         else:
             ts = self._state.clock_sync.system2lsl(time.time())
-        self._state.outlet.push_chunk(dat.reshape(dat.shape[0], -1), timestamp=ts)
+        dat = dat.reshape(dat.shape[0], -1)
+
+        if self._state.outlet.channel_format == pylsl.cf_string:
+            # pylsl requires string data to be passed sample-by-sample
+            for ix, row in enumerate(dat):
+                self._state.outlet.push_sample(list(row), timestamp=ts[ix] if isinstance(ts, np.ndarray) else ts)
+        else:
+            self._state.outlet.push_chunk(dat, timestamp=ts)
 
     def __call__(self, message: AxisArray):
         if self.check_metadata(message):
