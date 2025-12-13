@@ -4,20 +4,20 @@ This code exists mostly to use during development and debugging.
 """
 
 import asyncio
-from pathlib import Path
 import tempfile
 import typing
+from pathlib import Path
 
+import ezmsg.core as ez
 import numpy as np
 import pylsl
 import pytest
-import ezmsg.core as ez
-from ezmsg.util.messages.axisarray import AxisArray
-from ezmsg.util.messagelogger import MessageLogger, MessageLoggerSettings
 from ezmsg.util.messagecodec import message_log
+from ezmsg.util.messagelogger import MessageLogger, MessageLoggerSettings
+from ezmsg.util.messages.axisarray import AxisArray
 from ezmsg.util.terminate import TerminateOnTotal, TerminateOnTotalSettings
 
-from ezmsg.lsl.inlet import LSLInfo, LSLInletSettings, LSLInletGenerator, LSLInletUnit
+from ezmsg.lsl.inlet import LSLInfo, LSLInletGenerator, LSLInletSettings, LSLInletUnit
 
 
 def test_inlet_init_defaults():
@@ -43,9 +43,7 @@ def test_inlet_generator():
     state = {"pushed": 0}
 
     def step_outlet(n_interval: int = 10):
-        dummy_data = np.arange(state["pushed"], state["pushed"] + n_interval)[
-            :, None
-        ] / rate + np.zeros((1, nch))
+        dummy_data = np.arange(state["pushed"], state["pushed"] + n_interval)[:, None] / rate + np.zeros((1, nch))
         outlet.push_chunk(dummy_data.astype(np.float32))
         state["pushed"] += n_interval
 
@@ -117,11 +115,7 @@ def test_inlet_collection():
         def configure(self) -> None:
             self.DUMMY.apply_settings(DummyOutletSettings(rate=100.0, n_chans=8))
             self.INLET.apply_settings(
-                LSLInletSettings(
-                    LSLInfo(
-                        name=self.SETTINGS.stream_name, type=self.SETTINGS.stream_type
-                    )
-                )
+                LSLInletSettings(LSLInfo(name=self.SETTINGS.stream_name, type=self.SETTINGS.stream_type))
             )
             self.LOGGER.apply_settings(MessageLoggerSettings(output=file_path))
             self.TERM.apply_settings(TerminateOnTotalSettings(total=10))

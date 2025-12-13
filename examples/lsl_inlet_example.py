@@ -1,7 +1,9 @@
 import ezmsg.core as ez
-from ezmsg.lsl.units import LSLInletUnit, LSLInfo
-from ezmsg.util.debuglog import DebugLog
 import typer
+from ezmsg.util.debuglog import DebugLog
+
+from ezmsg.lsl.units import LSLInfo, LSLInletUnit
+
 # from ezmsg.util.messagelogger import MessageLogger, MessageLoggerSettings
 
 

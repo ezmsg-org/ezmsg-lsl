@@ -11,7 +11,7 @@ jobs:
   build:
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10.15", "3.11", "3.12", "3.13"]
         os:
           - "ubuntu-latest"
           - "windows-latest"
@@ -48,7 +48,7 @@ jobs:
           rm liblsl-1.16.0-OSX_arm64.tar.bz2
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"

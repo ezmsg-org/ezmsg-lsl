@@ -1,17 +1,16 @@
 import asyncio
-from dataclasses import dataclass, field, fields
 import time
 import typing
+from dataclasses import dataclass, field, fields
 
 import ezmsg.core as ez
-from ezmsg.util.messages.axisarray import AxisArray
-from ezmsg.util.messages.util import replace
 import numpy as np
 import numpy.typing as npt
 import pylsl
+from ezmsg.util.messages.axisarray import AxisArray
+from ezmsg.util.messages.util import replace
 
 from .util import ClockSync
-
 
 fmt2npdtype = {
     pylsl.cf_double64: float,  # Prefer native type for float64
@@ -42,8 +41,7 @@ def _sanitize_kwargs(kwargs: dict) -> dict:
                 replace_keys.add(k)
         if len(replace_keys) > 0:
             ez.logger.warning(
-                f"LSLInlet kwargs beginning with 'stream_' deprecated. Found {replace_keys}. "
-                f"See LSLInfo dataclass."
+                f"LSLInlet kwargs beginning with 'stream_' deprecated. Found {replace_keys}. See LSLInfo dataclass."
             )
             for k in replace_keys:
                 kwargs[k[7:]] = kwargs.pop(k)
@@ -70,7 +68,7 @@ class LSLInletSettings(ez.Settings):
 
     use_lsl_clock: bool = False
     """
-    Whether the AxisArray.Axis.offset should use LSL's clock (True) or time.time's clock (False -- default). 
+    Whether the AxisArray.Axis.offset should use LSL's clock (True) or time.time's clock (False -- default).
     """
 
     processing_flags: int = pylsl.proc_ALL
@@ -89,9 +87,7 @@ class LSLInletState(ez.State):
 
 
 class LSLInletGenerator:
-    def __init__(
-        self, *args, settings: typing.Optional[LSLInletSettings] = None, **kwargs
-    ):
+    def __init__(self, *args, settings: typing.Optional[LSLInletSettings] = None, **kwargs):
         kwargs = _sanitize_kwargs(kwargs)
         if settings is None:
             if len(args) > 0 and isinstance(args[0], LSLInletSettings):
@@ -148,25 +144,14 @@ class LSLInletGenerator:
                 channel_count=self.settings.info.channel_count,
                 channel_format=self.settings.info.channel_format,
             )
-            self._state.inlet = pylsl.StreamInlet(
-                info, max_chunklen=1, processing_flags=self.settings.processing_flags
-            )
+            self._state.inlet = pylsl.StreamInlet(info, max_chunklen=1, processing_flags=self.settings.processing_flags)
         elif self._state.resolver is not None:
             results: list[pylsl.StreamInfo] = self._state.resolver.results()
             for strm_info in results:
                 b_match = True
-                b_match = b_match and (
-                    (not self.settings.info.name)
-                    or strm_info.name() == self.settings.info.name
-                )
-                b_match = b_match and (
-                    (not self.settings.info.type)
-                    or strm_info.type() == self.settings.info.type
-                )
-                b_match = b_match and (
-                    (not self.settings.info.host)
-                    or strm_info.hostname() == self.settings.info.host
-                )
+                b_match = b_match and ((not self.settings.info.name) or strm_info.name() == self.settings.info.name)
+                b_match = b_match and ((not self.settings.info.type) or strm_info.type() == self.settings.info.type)
+                b_match = b_match and ((not self.settings.info.host) or strm_info.hostname() == self.settings.info.host)
                 if b_match:
                     self._state.inlet = pylsl.StreamInlet(
                         strm_info,
@@ -186,10 +171,7 @@ class LSLInletGenerator:
             n_ch = inlet_info.channel_count()
             if fmt in fmt2npdtype:
                 dtype = fmt2npdtype[fmt]
-                n_buff = (
-                    int(self.settings.local_buffer_dur * inlet_info.nominal_srate())
-                    or 1000
-                )
+                n_buff = int(self.settings.local_buffer_dur * inlet_info.nominal_srate()) or 1000
                 self._state.fetch_buffer = np.zeros((n_buff, n_ch), dtype=dtype)
             ch_labels = []
             chans = inlet_info.desc().child("channels")
@@ -205,18 +187,14 @@ class LSLInletGenerator:
             time_ax = (
                 AxisArray.TimeAxis(fs=fs)
                 if fs
-                else AxisArray.CoordinateAxis(
-                    data=np.array([]), dims=["time"], unit="s"
-                )
+                else AxisArray.CoordinateAxis(data=np.array([]), dims=["time"], unit="s")
             )
             self._state.msg_template = AxisArray(
                 data=np.empty((0, n_ch)),
                 dims=["time", "ch"],
                 axes={
                     "time": time_ax,
-                    "ch": AxisArray.CoordinateAxis(
-                        data=np.array(ch_labels), dims=["ch"]
-                    ),
+                    "ch": AxisArray.CoordinateAxis(data=np.array(ch_labels), dims=["ch"]),
                 },
                 key=inlet_info.name(),
             )
@@ -249,11 +227,7 @@ class LSLInletGenerator:
 
         out_msg = self._state.msg_template
         if len(timestamps):
-            data = (
-                self._state.fetch_buffer[: len(timestamps)].copy()
-                if samples is None
-                else samples
-            )
+            data = self._state.fetch_buffer[: len(timestamps)].copy() if samples is None else samples
 
             # `timestamps` is currently in the LSL clock stamped by the sender.
             if self.settings.use_arrival_time:
@@ -273,9 +247,7 @@ class LSLInletGenerator:
                 )
             else:
                 # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
-                out_time_ax = replace(
-                    self._state.msg_template.axes["time"], offset=timestamps[0]
-                )
+                out_time_ax = replace(self._state.msg_template.axes["time"], offset=timestamps[0])
 
             out_msg = replace(
                 self._state.msg_template,

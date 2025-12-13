@@ -4,12 +4,11 @@ import time
 import typing
 
 import ezmsg.core as ez
-from ezmsg.util.messages.axisarray import AxisArray
 import numpy as np
 import pylsl
+from ezmsg.util.messages.axisarray import AxisArray
 
 from .util import ClockSync
-
 
 # Reproduce pylsl.string2fmt but add float64 for more familiar numpy usage
 string2fmt = {
@@ -76,9 +75,7 @@ class LSLOutletState(ez.State):
 
 
 class OutletProcessor:
-    def __init__(
-        self, *args, settings: typing.Optional[LSLOutletSettings] = None, **kwargs
-    ):
+    def __init__(self, *args, settings: typing.Optional[LSLOutletSettings] = None, **kwargs):
         if settings is None:
             if len(args) > 0 and isinstance(args[0], LSLOutletSettings):
                 settings = args[0]
@@ -110,9 +107,7 @@ class OutletProcessor:
             if hasattr(message.axes["time"], "gain"):
                 fs = 1 / message.axes["time"].gain
             time_ix = message.get_axis_idx("time")
-            sample_shape = (
-                message.data.shape[:time_ix] + message.data.shape[time_ix + 1 :]
-            )
+            sample_shape = message.data.shape[:time_ix] + message.data.shape[time_ix + 1 :]
         this_hash = hash((message.key, message.data.dtype, fs, sample_shape))
         b_reset = b_reset or this_hash != self._state.hash
         if b_reset:
@@ -144,9 +139,7 @@ class OutletProcessor:
             source_id="ezmsg-" + source_id,
         )
         # Add channel labels to the info desc.
-        if "ch" in message.axes and isinstance(
-            message.axes["ch"], AxisArray.CoordinateAxis
-        ):
+        if "ch" in message.axes and isinstance(message.axes["ch"], AxisArray.CoordinateAxis):
             ch_labels = message.axes["ch"].data
             # TODO: or get ch_labels from self.settings.map_file
             # TODO: if msg is multi-dim then construct labels by combining dims.
