@@ -161,3 +161,4 @@ cython_debug/
 
 # __version__ file recreated on build / install.
 src/ezmsg/lsl/__version__.py
+uv.lock
