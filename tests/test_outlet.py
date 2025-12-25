@@ -8,13 +8,15 @@ import typing
 from pathlib import Path
 
 import ezmsg.core as ez
-from ezmsg.sigproc.synth import Clock, Oscillator
+from ezmsg.baseproc.clock import Clock
 from ezmsg.util.messagecodec import message_log
 from ezmsg.util.messagelogger import MessageLogger
 from ezmsg.util.messages.axisarray import AxisArray
 from ezmsg.util.terminate import TerminateOnTotal
 
 from ezmsg.lsl.outlet import LSLOutletUnit
+
+from helpers.synth import Oscillator
 
 
 def test_outlet_system():
