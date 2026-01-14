@@ -7,8 +7,7 @@
 :maxdepth: 2
 :caption: Contents:
 
-guides/ProcessorsBase
-guides/how-tos/processors/content-processors
+guides/usage
 api/index
 ```
 
