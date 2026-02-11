@@ -5,7 +5,7 @@ authors = [
   { name = "Chadwick Boulay", email = "chadwick.boulay@gmail.com" },
 ]
 readme = "README.md"
-requires-python = ">=3.10.15"
+requires-python = ">=3.10"
 dependencies = [
     "ezmsg>=3.6.0",
     "numpy>=1.26.4",
