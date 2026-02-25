@@ -59,6 +59,7 @@ class ClockSync:
             self._last_time = time.monotonic() - 1e9
             self._running = False
             self._thread: typing.Optional[threading.Thread] = None
+            self._task: typing.Optional[asyncio.Task] = None
             # Do first burst so we have a real offset even before the thread starts.
             xs, ys = collect_timestamp_pairs(100)
             self._offset: float = np.mean(ys - xs)
@@ -87,14 +88,40 @@ class ClockSync:
             time.sleep(self._interval)
             self.run_once(4, True)
 
+    async def _arun(self):
+        try:
+            while True:
+                await asyncio.sleep(self._interval)
+                await self.arun_once(4, True)
+        except asyncio.CancelledError:
+            pass
+
     def start(self):
+        if self._thread is not None and self._thread.is_alive():
+            return
         self._running = True
         self._thread = threading.Thread(target=self._run)
         self._thread.daemon = True
         self._thread.start()
 
+    async def astart(self):
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._arun())
+
+    async def astop(self):
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
     def stop(self):
         self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
 
     @property
     def offset(self) -> float:

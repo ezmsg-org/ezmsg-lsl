@@ -10,8 +10,9 @@ from ezmsg.lsl.util import ClockSync, collect_timestamp_pairs
 def test_clock_sync(own_thread: bool):
     tol = 10e-3  # 1 msec
 
-    clock_sync = ClockSync(run_thread=own_thread)
+    clock_sync = ClockSync()
     if own_thread:
+        clock_sync.start()
         # Let it run a bit to get a stable estimate.
         time.sleep(1.0)
         clock_sync.stop()
@@ -32,4 +33,5 @@ def test_clock_sync(own_thread: bool):
 
     # Assert singleton-ness
     clock_sync2 = ClockSync()
+    clock_sync2.start()
     assert clock_sync is clock_sync2

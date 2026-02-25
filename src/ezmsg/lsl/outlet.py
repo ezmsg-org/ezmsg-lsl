@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import time
 import typing
@@ -92,7 +91,7 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
 
     def _reset_state(self, message: AxisArray) -> None:
         self.shutdown()
-        self._state.clock_sync = ClockSync(run_thread=False)
+        self._state.clock_sync = ClockSync()
 
         fs = pylsl.IRREGULAR_RATE
         if "time" in message.axes and hasattr(message.axes["time"], "gain"):
@@ -159,6 +158,10 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
         else:
             self._state.outlet.push_chunk(dat, timestamp=ts)
 
+    async def _aprocess(self, message: AxisArray) -> None:
+        await self._state.clock_sync.arun_once()
+        self._process(message)
+
     def shutdown(self) -> None:
         if self._state.outlet is not None:
             del self._state.outlet
@@ -185,13 +188,6 @@ class LSLOutletUnit(BaseConsumerUnit[LSLOutletSettings, AxisArray, OutletProcess
         if hasattr(self, "processor") and self.processor is not None:
             self.processor.shutdown()
         super().create_processor()
-
-    @ez.task
-    async def update_clock(self) -> None:
-        while True:
-            if self.processor is not None and self.processor.state.outlet is not None:
-                self.processor.state.clock_sync.run_once()
-            await asyncio.sleep(0.1)
 
     async def shutdown(self) -> None:
         if hasattr(self, "processor") and self.processor is not None:

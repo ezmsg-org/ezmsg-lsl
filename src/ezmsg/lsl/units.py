@@ -5,7 +5,7 @@ from .inlet import LSLInletProducer as LSLInletProducer
 from .inlet import LSLInletSettings as LSLInletSettings
 from .inlet import LSLInletUnit as LSLInletUnit
 from .inlet import fmt2npdtype as fmt2npdtype
+from .outlet import LSLOutletProcessorState as LSLOutletProcessorState
 from .outlet import LSLOutletSettings as LSLOutletSettings
-from .outlet import LSLOutletState as LSLOutletState
 from .outlet import LSLOutletUnit as LSLOutletUnit
 from .outlet import string2fmt as string2fmt

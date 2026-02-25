@@ -118,7 +118,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
 
     def _reset_state(self) -> None:
         self._state.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
-        self._state.clock_sync = ClockSync(run_thread=False)
+        self._state.clock_sync = ClockSync()
 
     def _try_connect(self) -> None:
         """Attempt to find and connect to a matching LSL stream.
@@ -282,8 +282,8 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
                 await asyncio.sleep(0.01)
                 return None
 
-        # Update clock sync off the event loop — run_once does time.sleep() internally.
-        await asyncio.to_thread(self._state.clock_sync.run_once)
+        # Update clock sync if its rate limiter has expired.
+        await self._state.clock_sync.arun_once()
 
         # Re-check after the await — shutdown may have closed the inlet.
         if self._state.inlet is None:
