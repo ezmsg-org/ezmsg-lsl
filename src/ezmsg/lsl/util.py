@@ -14,12 +14,12 @@ def collect_timestamp_pairs(
     ys = []
     for _ in range(npairs):
         if _ % 2:
-            y, x = time.time(), pylsl.local_clock()
+            y, x = time.monotonic(), pylsl.local_clock()
         else:
-            x, y = pylsl.local_clock(), time.time()
+            x, y = pylsl.local_clock(), time.monotonic()
         xs.append(x)
         ys.append(y)
-        time.sleep(0.001)
+        time.sleep(0.001)  # Usually sleeps more than 1 msec.
     return np.array(xs), np.array(ys)
 
 
@@ -38,7 +38,7 @@ class ClockSync:
             self._alpha = alpha
             self._interval = min_interval
             self._initialized = True
-            self._last_time = time.time() - 1e9
+            self._last_time = time.monotonic() - 1e9
             self._running = False
             self._thread: typing.Optional[threading.Thread] = None
             # Do first burst so we have a real offset even before the thread starts.
@@ -49,11 +49,11 @@ class ClockSync:
                 self.start()
 
     def run_once(self, n: int = 4, force: bool = False):
-        if force or (time.time() - self._last_time) > self._interval:
+        if force or (time.monotonic() - self._last_time) > self._interval:
             xs, ys = collect_timestamp_pairs(n)
             offset = np.mean(ys - xs)
             self._offset = (1 - self._alpha) * self._offset + self._alpha * offset
-            self._last_time = time.time()
+            self._last_time = time.monotonic()
 
     def _run(self):
         while self._running:
