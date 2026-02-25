@@ -7,7 +7,8 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "ezmsg>=3.6.0",
+    "ezmsg>=3.7.3",
+    "ezmsg-baseproc>=1.2.1",
     "numpy>=1.26.4",
     "pylsl>=1.18.1",
 ]
@@ -27,7 +28,6 @@ test = [
     "flake8>=7.1.1",
     "pytest-cov>=5.0.0",
     "pytest>=8.3.3",
-    "ezmsg-baseproc>=1.1.0",
 ]
 docs = [
   "sphinx>=7.0",
