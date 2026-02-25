@@ -17,7 +17,7 @@ from ezmsg.util.messagelogger import MessageLogger, MessageLoggerSettings
 from ezmsg.util.messages.axisarray import AxisArray
 from ezmsg.util.terminate import TerminateOnTotal, TerminateOnTotalSettings
 
-from ezmsg.lsl.inlet import LSLInfo, LSLInletGenerator, LSLInletSettings, LSLInletUnit
+from ezmsg.lsl.inlet import LSLInfo, LSLInletProducer, LSLInletSettings, LSLInletUnit
 
 
 def test_inlet_init_defaults():
@@ -26,9 +26,9 @@ def test_inlet_init_defaults():
     assert True
 
 
-def test_inlet_generator():
+def test_inlet_producer():
     """
-    Test the inlet generator object without invoking ezmsg.
+    Test the inlet producer object without invoking ezmsg.
     """
     rate = 32.0
     nch = 8
@@ -47,9 +47,9 @@ def test_inlet_generator():
         outlet.push_chunk(dummy_data.astype(np.float32))
         state["pushed"] += n_interval
 
-    gen = LSLInletGenerator(info=LSLInfo(name="dummy", type="dummy"))
+    producer = LSLInletProducer(info=LSLInfo(name="dummy", type="dummy"))
     counter = 0
-    for msg in gen:
+    for msg in producer:
         step_outlet()
         if msg is None or np.prod(msg.data.shape) == 0:
             continue
