@@ -107,7 +107,7 @@ LSL streams can have regular sampling (e.g., EEG at 500 Hz) or irregular samplin
 Clock Synchronization
 ^^^^^^^^^^^^^^^^^^^^^
 
-By default, timestamps are converted from LSL clock to system time (``time.time()``).
+By default, timestamps are converted from LSL clock to system time (``time.monotonic()``).
 You can control this behavior:
 
 .. code-block:: python
@@ -121,7 +121,7 @@ You can control this behavior:
    # Alternative: Use arrival time instead of send time
    LSLInletSettings(
        info=LSLInfo(name="MyStream"),
-       use_arrival_time=True,    # Use time.time() when data arrives
+       use_arrival_time=True,    # Use time.monotonic() when data arrives
    )
 
    # Alternative: Keep LSL clock (useful when both ends use LSL)
