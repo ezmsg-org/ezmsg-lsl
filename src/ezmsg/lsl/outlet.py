@@ -159,16 +159,16 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
             self._state.outlet.push_chunk(dat, timestamp=ts)
 
     async def _aprocess(self, message: AxisArray) -> None:
-        await self._state.clock_sync.arun_once()
+        if self._state.clock_sync is not None:
+            await self._state.clock_sync.arun_once()
         self._process(message)
 
     def shutdown(self) -> None:
         if self._state.outlet is not None:
             del self._state.outlet
             self._state.outlet = None
-        if self._state.clock_sync is not None:
-            # The thread is not usually started, but in case it is...
-            self._state.clock_sync.stop()
+        # ClockSync is a singleton shared across all LSL units in the process.
+        # Don't stop() it — just drop our reference.
         self._state.clock_sync = None
 
 

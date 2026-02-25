@@ -283,7 +283,8 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
                 return None
 
         # Update clock sync if its rate limiter has expired.
-        await self._state.clock_sync.arun_once()
+        if self._state.clock_sync is not None:
+            await self._state.clock_sync.arun_once()
 
         # Re-check after the await — shutdown may have closed the inlet.
         if self._state.inlet is None:
@@ -297,13 +298,11 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
     def shutdown(self) -> None:
         self._state.msg_template = None
         self._state.fetch_buffer = None
-        if self._state.inlet is not None:
-            self._state.inlet.close_stream()
-            del self._state.inlet
+        # StreamInlet cleanup takes ~500ms (liblsl cancellation logic).
+        # This is acceptable; the ezmsg core handles SIGINT during shutdown.
         self._state.inlet = None
-        if self._state.clock_sync is not None:
-            # The thread is not usually started, but in case it is...
-            self._state.clock_sync.stop()
+        # ClockSync is a singleton shared across all LSL units in the process.
+        # Don't stop() it — just drop our reference.
         self._state.clock_sync = None
 
 
@@ -336,8 +335,6 @@ class LSLInletUnit(BaseProducerUnit[LSLInletSettings, typing.Optional[AxisArray]
             self.producer.shutdown()
         super().create_producer()
 
-    async def shutdown(self) -> None:
+    def shutdown(self) -> None:
         if hasattr(self, "producer") and self.producer is not None:
-            # Run in a thread so close_stream() doesn't block the event loop.
-            # This allows other tasks to process their cancellation during shutdown.
-            await asyncio.to_thread(self.producer.shutdown)
+            self.producer.shutdown()
