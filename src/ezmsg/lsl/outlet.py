@@ -6,6 +6,7 @@ import typing
 import ezmsg.core as ez
 import numpy as np
 import pylsl
+from ezmsg.baseproc import BaseConsumerUnit, BaseStatefulConsumer, processor_state
 from ezmsg.util.messages.axisarray import AxisArray
 
 from .util import ClockSync
@@ -68,39 +69,18 @@ class LSLOutletSettings(ez.Settings):
     """
 
 
-class LSLOutletState(ez.State):
+@processor_state
+class LSLOutletProcessorState:
     outlet: typing.Optional[pylsl.StreamOutlet] = None
-    clock_sync: ClockSync = ClockSync(run_thread=False)
-    hash: int = 0
+    clock_sync: typing.Optional[ClockSync] = None
+
+    def __init__(self) -> None:
+        self.outlet = None
+        self.clock_sync = None
 
 
-class OutletProcessor:
-    def __init__(self, *args, settings: typing.Optional[LSLOutletSettings] = None, **kwargs):
-        if settings is None:
-            if len(args) > 0 and isinstance(args[0], LSLOutletSettings):
-                settings = args[0]
-            elif len(args) > 0 or len(kwargs) > 0:
-                settings = LSLOutletSettings(*args, **kwargs)
-            else:
-                settings = LSLOutletSettings()
-        self.settings = settings
-        self._state: LSLOutletState = LSLOutletState()
-
-    def __del__(self):
-        self.shutdown()
-
-    @property
-    def state(self) -> LSLOutletState:
-        return self._state
-
-    def shutdown(self):
-        if self._state.outlet is not None:
-            del self._state.outlet
-            self._state.outlet = None
-
-    def check_metadata(self, message: AxisArray) -> bool:
-        b_reset = False
-        b_reset = b_reset or self.state.outlet is None
+class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutletProcessorState]):
+    def _hash_message(self, message: AxisArray) -> int:
         fs = pylsl.IRREGULAR_RATE
         sample_shape = message.data.shape
         if "time" in message.axes:
@@ -108,14 +88,11 @@ class OutletProcessor:
                 fs = 1 / message.axes["time"].gain
             time_ix = message.get_axis_idx("time")
             sample_shape = message.data.shape[:time_ix] + message.data.shape[time_ix + 1 :]
-        this_hash = hash((message.key, message.data.dtype, fs, sample_shape))
-        b_reset = b_reset or this_hash != self._state.hash
-        if b_reset:
-            self._state.hash = this_hash
-        return b_reset
+        return hash((message.key, message.data.dtype, fs, sample_shape))
 
-    def reset(self, message: AxisArray) -> None:
+    def _reset_state(self, message: AxisArray) -> None:
         self.shutdown()
+        self._state.clock_sync = ClockSync(run_thread=False)
 
         fs = pylsl.IRREGULAR_RATE
         if "time" in message.axes and hasattr(message.axes["time"], "gain"):
@@ -152,7 +129,7 @@ class OutletProcessor:
                     # TODO: if self.settings.map_file: Add channel locations
         self._state.outlet = pylsl.StreamOutlet(info)
 
-    def _process(self, message: AxisArray):
+    def _process(self, message: AxisArray) -> None:
         dat = message.data
         if message.dims[0] != "time":
             dat = np.moveaxis(dat, message.dims.index("time"), 0)
@@ -172,7 +149,7 @@ class OutletProcessor:
             if not self.settings.assume_lsl_clock:
                 ts = self._state.clock_sync.system2lsl(ts)
         else:
-            ts = self._state.clock_sync.system2lsl(time.time())
+            ts = self._state.clock_sync.system2lsl(time.monotonic())
         dat = dat.reshape(dat.shape[0], -1)
 
         if self._state.outlet.channel_format == pylsl.cf_string:
@@ -182,46 +159,40 @@ class OutletProcessor:
         else:
             self._state.outlet.push_chunk(dat, timestamp=ts)
 
-    def __call__(self, message: AxisArray):
-        if self.check_metadata(message):
-            self.reset(message)
-        return self._process(message)
-
-    def __iter__(self):
-        self._state: LSLOutletState = LSLOutletState()
-        return self
-
-    send = __call__  # Alias method name
+    def shutdown(self) -> None:
+        if self._state.outlet is not None:
+            del self._state.outlet
+            self._state.outlet = None
+        if self._state.clock_sync is not None:
+            # The thread is not usually started, but in case it is...
+            self._state.clock_sync.stop()
+        self._state.clock_sync = None
 
 
-class LSLOutletUnit(ez.Unit):
+class LSLOutletUnit(BaseConsumerUnit[LSLOutletSettings, AxisArray, OutletProcessor]):
     """
-    Represents a node in a Labgraph graph that subscribes to messages in a
-    Labgraph topic and forwards them by writing to an LSL outlet.
+    Represents a node in a graph that subscribes to messages and
+    forwards them by writing to an LSL outlet.
 
     Args:
         stream_name: The `name` of the created LSL outlet.
         stream_type: The `type` of the created LSL outlet.
     """
 
-    INPUT_SIGNAL = ez.InputStream(AxisArray)
-
     SETTINGS = LSLOutletSettings
-    STATE = LSLOutletState
 
-    async def initialize(self) -> None:
-        self.create_processor()
-
-    def create_processor(self):
-        self.processor = OutletProcessor(settings=self.SETTINGS)
+    def create_processor(self) -> None:
+        if hasattr(self, "processor") and self.processor is not None:
+            self.processor.shutdown()
+        super().create_processor()
 
     @ez.task
     async def update_clock(self) -> None:
         while True:
-            if self.STATE.outlet is not None:
+            if self.processor is not None and self.processor.state.outlet is not None:
                 self.processor.state.clock_sync.run_once()
             await asyncio.sleep(0.1)
 
-    @ez.subscriber(INPUT_SIGNAL, zero_copy=True)
-    async def lsl_outlet(self, msg: AxisArray) -> None:
-        self.processor(msg)
+    async def shutdown(self) -> None:
+        if hasattr(self, "processor") and self.processor is not None:
+            self.processor.shutdown()
