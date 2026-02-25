@@ -43,7 +43,7 @@ class Oscillator(ez.Unit):
 
     async def initialize(self) -> None:
         self._n_sent = 0
-        self._t0 = time.time()
+        self._t0 = time.monotonic()
 
         # Calculate synchronized frequency if requested
         self._freq = self.SETTINGS.freq
@@ -98,14 +98,14 @@ class Oscillator(ez.Unit):
                 # Realtime mode: sleep until wall-clock time matches sample time
                 n_next = self._n_sent + self.SETTINGS.n_time
                 t_next = self._t0 + n_next / self.SETTINGS.fs
-                sleep_time = t_next - time.time()
+                sleep_time = t_next - time.monotonic()
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
             elif self.SETTINGS.dispatch_rate is not None:
                 # Manual dispatch rate mode
                 n_disp = 1 + self._n_sent / self.SETTINGS.n_time
                 t_next = self._t0 + n_disp / self.SETTINGS.dispatch_rate
-                sleep_time = t_next - time.time()
+                sleep_time = t_next - time.monotonic()
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
 
