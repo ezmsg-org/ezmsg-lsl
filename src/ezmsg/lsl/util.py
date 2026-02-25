@@ -1,3 +1,4 @@
+import asyncio
 import threading
 import time
 import typing
@@ -7,19 +8,36 @@ import numpy.typing as npt
 import pylsl
 
 
+def _sample_clock_pair(i: int) -> typing.Tuple[float, float]:
+    """Sample one LSL/system clock pair, alternating order to reduce bias."""
+    if i % 2:
+        y, x = time.monotonic(), pylsl.local_clock()
+    else:
+        x, y = pylsl.local_clock(), time.monotonic()
+    return x, y
+
+
 def collect_timestamp_pairs(
     npairs: int = 4,
 ) -> typing.Tuple[np.ndarray, np.ndarray]:
-    xs = []
-    ys = []
-    for _ in range(npairs):
-        if _ % 2:
-            y, x = time.monotonic(), pylsl.local_clock()
-        else:
-            x, y = pylsl.local_clock(), time.monotonic()
+    xs, ys = [], []
+    for i in range(npairs):
+        x, y = _sample_clock_pair(i)
         xs.append(x)
         ys.append(y)
         time.sleep(0.001)  # Usually sleeps more than 1 msec.
+    return np.array(xs), np.array(ys)
+
+
+async def acollect_timestamp_pairs(
+    npairs: int = 4,
+) -> typing.Tuple[np.ndarray, np.ndarray]:
+    xs, ys = [], []
+    for i in range(npairs):
+        x, y = _sample_clock_pair(i)
+        xs.append(x)
+        ys.append(y)
+        await asyncio.sleep(0)
     return np.array(xs), np.array(ys)
 
 
@@ -48,12 +66,21 @@ class ClockSync:
             if run_thread:
                 self.start()
 
+    def _update_offset(self, xs: np.ndarray, ys: np.ndarray) -> None:
+        offset = np.mean(ys - xs)
+        self._offset = (1 - self._alpha) * self._offset + self._alpha * offset
+        self._last_time = time.monotonic()
+
+    def _should_update(self, force: bool = False) -> bool:
+        return force or (time.monotonic() - self._last_time) > self._interval
+
     def run_once(self, n: int = 4, force: bool = False):
-        if force or (time.monotonic() - self._last_time) > self._interval:
-            xs, ys = collect_timestamp_pairs(n)
-            offset = np.mean(ys - xs)
-            self._offset = (1 - self._alpha) * self._offset + self._alpha * offset
-            self._last_time = time.monotonic()
+        if self._should_update(force):
+            self._update_offset(*collect_timestamp_pairs(n))
+
+    async def arun_once(self, n: int = 4, force: bool = False):
+        if self._should_update(force):
+            self._update_offset(*await acollect_timestamp_pairs(n))
 
     def _run(self):
         while self._running:
