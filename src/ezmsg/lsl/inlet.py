@@ -301,6 +301,10 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             self._state.inlet.close_stream()
             del self._state.inlet
         self._state.inlet = None
+        if self._state.clock_sync is not None:
+            # The thread is not usually started, but in case it is...
+            self._state.clock_sync.stop()
+        self._state.clock_sync = None
 
 
 class LSLInletGenerator(LSLInletProducer):
