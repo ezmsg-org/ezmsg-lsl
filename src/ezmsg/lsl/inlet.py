@@ -15,6 +15,76 @@ from ezmsg.util.messages.util import replace
 
 from .util import ClockSync
 
+
+def _parse_channel_metadata(chans_elem, n_ch: int) -> typing.Optional[np.ndarray]:
+    """Parse a ``<channels>`` XML element into a structured numpy array.
+
+    Returns ``None`` if the element is empty or the channel count doesn't match.
+    """
+    if chans_elem.empty():
+        return None
+
+    # Collect all channel records and discover field names in insertion order.
+    ch_records: list[dict[str, str]] = []
+    field_order: list[str] = []
+
+    ch_elem = chans_elem.first_child()
+    while not ch_elem.empty():
+        rec: dict[str, str] = {}
+        child = ch_elem.first_child()
+        while not child.empty():
+            tag = child.name()
+            if tag == "location":
+                # Flatten: <location><X>→x, <Y>→y, <Z>→z
+                loc_child = child.first_child()
+                while not loc_child.empty():
+                    key = loc_child.name().lower()
+                    rec[key] = loc_child.child_value()
+                    if key not in field_order:
+                        field_order.append(key)
+                    loc_child = loc_child.next_sibling()
+            else:
+                rec[tag] = child.child_value()
+                if tag not in field_order:
+                    field_order.append(tag)
+            child = child.next_sibling()
+        ch_records.append(rec)
+        ch_elem = ch_elem.next_sibling()
+
+    if not ch_records or len(ch_records) != n_ch:
+        return None
+
+    # Infer a numpy dtype for each field.
+    dtype_fields: list[tuple[str, str]] = []
+    for fname in field_order:
+        vals = [rec.get(fname, "") for rec in ch_records]
+        non_empty = [v for v in vals if v]
+        if non_empty:
+            try:
+                [int(v) for v in non_empty]
+                dtype_fields.append((fname, "i4"))
+                continue
+            except ValueError:
+                pass
+            try:
+                [float(v) for v in non_empty]
+                dtype_fields.append((fname, "f4"))
+                continue
+            except ValueError:
+                pass
+        max_len = max((len(v) for v in vals), default=1) or 1
+        dtype_fields.append((fname, f"U{max_len}"))
+
+    ch_dtype = np.dtype(dtype_fields)
+    ch_data = np.zeros(len(ch_records), dtype=ch_dtype)
+    for i, rec in enumerate(ch_records):
+        for fname in field_order:
+            val = rec.get(fname, "")
+            if val:
+                ch_data[i][fname] = val
+    return ch_data
+
+
 fmt2npdtype = {
     pylsl.cf_double64: float,  # Prefer native type for float64
     pylsl.cf_int64: int,  # Prefer native type for int64
@@ -199,15 +269,20 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             dtype = fmt2npdtype[fmt]
             n_buff = int(self.settings.local_buffer_dur * inlet_info.nominal_srate()) or 1000
             self._state.fetch_buffer = np.zeros((n_buff, n_ch), dtype=dtype)
-        ch_labels: list[str] = []
+        # Parse channel metadata into a structured array when possible.
         chans = inlet_info.desc().child("channels")
-        if not chans.empty():
-            ch = chans.first_child()
-            while not ch.empty():
-                ch_labels.append(ch.child_value("label"))
-                ch = ch.next_sibling()
-        while len(ch_labels) < n_ch:
-            ch_labels.append(str(len(ch_labels) + 1))
+        ch_info = _parse_channel_metadata(chans, n_ch)
+        if ch_info is not None:
+            # Fill any missing labels with 1-based indices.
+            if "label" in ch_info.dtype.names:
+                for i in range(n_ch):
+                    if not ch_info[i]["label"]:
+                        ch_info[i]["label"] = str(i + 1)
+            ch_ax = AxisArray.CoordinateAxis(data=ch_info, dims=["ch"])
+        else:
+            # No structured metadata — fall back to numeric string labels.
+            ch_labels = [str(i + 1) for i in range(n_ch)]
+            ch_ax = AxisArray.CoordinateAxis(data=np.array(ch_labels), dims=["ch"])
         # Pre-allocate a message template.
         fs = inlet_info.nominal_srate()
         time_ax = (
@@ -216,10 +291,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._state.msg_template = AxisArray(
             data=np.empty((0, n_ch)),
             dims=["time", "ch"],
-            axes={
-                "time": time_ax,
-                "ch": AxisArray.CoordinateAxis(data=np.array(ch_labels), dims=["ch"]),
-            },
+            axes={"time": time_ax, "ch": ch_ax},
             key=inlet_info.name(),
         )
 
