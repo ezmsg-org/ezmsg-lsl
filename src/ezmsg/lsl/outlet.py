@@ -114,18 +114,33 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
             channel_format=string2fmt[channel_format],
             source_id="ezmsg-" + source_id,
         )
-        # Add channel labels to the info desc.
+        # Add channel metadata to the info desc.
         if "ch" in message.axes and isinstance(message.axes["ch"], AxisArray.CoordinateAxis):
-            ch_labels = message.axes["ch"].data
-            # TODO: or get ch_labels from self.settings.map_file
+            ch_data = message.axes["ch"].data
+            # TODO: or get ch_data from self.settings.map_file
             # TODO: if msg is multi-dim then construct labels by combining dims.
             #  For now, labels only work if only output dims are "time", "ch"
-            if len(ch_labels) == out_size:
+            if len(ch_data) == out_size:
                 chans = info.desc().append_child("channels")
-                for ch in ch_labels:
-                    chan = chans.append_child("channel")
-                    chan.append_child_value("label", ch)
-                    # TODO: if self.settings.map_file: Add channel locations
+                if ch_data.dtype.names is not None:
+                    # Structured array — map fields to XDF channel metadata
+                    label_field = next((f for f in ("label", "name") if f in ch_data.dtype.names), None)
+                    loc_fields = {f: f.upper() for f in ("x", "y", "z") if f in ch_data.dtype.names}
+                    other_fields = [f for f in ch_data.dtype.names if f not in (label_field, "x", "y", "z")]
+                    for ch in ch_data:
+                        chan = chans.append_child("channel")
+                        if label_field is not None:
+                            chan.append_child_value("label", str(ch[label_field]))
+                        if loc_fields:
+                            loc = chan.append_child("location")
+                            for struct_f, xml_f in loc_fields.items():
+                                loc.append_child_value(xml_f, str(ch[struct_f]))
+                        for f in other_fields:
+                            chan.append_child_value(f, str(ch[f]))
+                else:
+                    for ch in ch_data:
+                        chan = chans.append_child("channel")
+                        chan.append_child_value("label", str(ch))
         self._state.outlet = pylsl.StreamOutlet(info)
 
     def _process(self, message: AxisArray) -> None:
