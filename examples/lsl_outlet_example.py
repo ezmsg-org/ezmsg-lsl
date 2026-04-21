@@ -7,7 +7,7 @@ from typing import Tuple
 
 import ezmsg.core as ez
 import typer
-from ezmsg.sigproc.synth import EEGSynth, EEGSynthSettings
+from ezmsg.simbiophys import EEGSynth, EEGSynthSettings
 
 from ezmsg.lsl.units import LSLOutletSettings, LSLOutletUnit
 

@@ -7,8 +7,8 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "ezmsg>=3.7.3",
-    "ezmsg-baseproc>=1.2.1",
+    "ezmsg>=3.9.0",
+    "ezmsg-baseproc>=1.7.0",
     "numpy>=1.26.4",
     "pylsl>=1.18.1",
 ]
@@ -35,6 +35,9 @@ docs = [
   "sphinx-copybutton",
   "pydata-sphinx-theme",
   "myst-parser",
+]
+examples = [
+    "ezmsg-simbiophys"
 ]
 
 [build-system]
