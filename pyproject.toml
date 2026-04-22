@@ -10,7 +10,7 @@ dependencies = [
     "ezmsg>=3.9.0",
     "ezmsg-baseproc>=1.7.0",
     "numpy>=1.26.4",
-    "pylsl>=1.18.1",
+    "pylsl>=1.18.2",
 ]
 dynamic = ["version"]
 
