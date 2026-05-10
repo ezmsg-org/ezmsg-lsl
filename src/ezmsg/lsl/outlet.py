@@ -46,11 +46,6 @@ def generate_source_id(
 class LSLOutletSettings(ez.Settings):
     stream_name: typing.Optional[str] = None
     stream_type: typing.Optional[str] = None
-    map_file: typing.Optional[str] = None
-    """
-    Path to file containing a list of channel names and locations.
-    This feature is experimental and not tested.
-    """
 
     use_message_timestamp: bool = True
     """
