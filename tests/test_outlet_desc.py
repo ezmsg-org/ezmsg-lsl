@@ -5,8 +5,8 @@ isolation — without spinning up a real :class:`pylsl.StreamOutlet`, which
 would touch the LSL network.  The function takes a fresh ``StreamInfo``
 and an :class:`AxisArray`, and writes both:
 
-* well-known stream-level ``attrs`` (``conversion``, ``offset``,
-  ``unit``) as top-level desc XML elements; and
+* every stream-level entry in ``message.attrs`` as a top-level desc XML
+  element; and
 * a per-channel ``<channel>`` block when the message's ``"ch"`` axis is
   a :class:`CoordinateAxis`.
 """
@@ -54,7 +54,7 @@ def _make_info(
 
 
 class TestStreamLevelAttrs:
-    def test_known_attrs_emitted_as_desc_children(self):
+    def test_attrs_emitted_as_desc_children(self):
         msg = _make_int16_msg(
             attrs={
                 "conversion": 0.000244,
@@ -65,7 +65,7 @@ class TestStreamLevelAttrs:
         info = _make_info()
         populate_desc_from_axisarray(info, msg, out_size=3)
         xml = info.as_xml()
-        # Each promoted attr appears as a top-level <key>value</key> in desc.
+        # Each attr appears as a top-level <key>value</key> in desc.
         assert "<conversion>0.000244</conversion>" in xml
         assert "<offset>0.0</offset>" in xml
         assert "<unit>a.u.</unit>" in xml
@@ -85,21 +85,16 @@ class TestStreamLevelAttrs:
         assert "<offset>" not in xml
         assert "<unit>" not in xml
 
-    def test_non_known_attrs_are_dropped(self):
-        """Only the well-known attr keys ride the LSL XML.
-
-        Other AxisArray.attrs entries stay on the message but don't
-        appear in the stream descriptor, so the on-the-wire XML stays
-        bounded regardless of how the upstream graph populates attrs.
-        """
+    def test_arbitrary_attrs_ride_xml(self):
+        """All AxisArray.attrs entries land in the stream descriptor."""
         msg = _make_int16_msg(
-            attrs={"conversion": 0.5, "ignore_me": "private"},
+            attrs={"conversion": 0.5, "custom_key": "custom_value"},
         )
         info = _make_info()
         populate_desc_from_axisarray(info, msg, out_size=3)
         xml = info.as_xml()
         assert "<conversion>0.5</conversion>" in xml
-        assert "ignore_me" not in xml
+        assert "<custom_key>custom_value</custom_key>" in xml
 
 
 class TestPerChannelLabels:
