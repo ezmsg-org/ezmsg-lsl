@@ -43,31 +43,17 @@ def generate_source_id(
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
-# Stream-level attrs we promote to top-level desc XML elements when present
-# on the incoming AxisArray.  Sources upstream (e.g. ``Digitize``) stamp
-# these so consumers — pulling from the stream's desc XML — can recover an
-# approximation of the original float values via ``data * conversion +
-# offset`` (and label units accordingly).  Anything else stays on
-# ``message.attrs`` but doesn't ride the LSL XML.
-#
-# ``min_val`` / ``max_val`` aren't included: a consumer that has the data
-# dtype can derive them from ``conversion`` and ``offset``, so emitting
-# them would be redundant.
-_DESC_ATTR_KEYS = ("conversion", "offset", "unit")
-
-
 def populate_desc_from_axisarray(info: pylsl.StreamInfo, message: AxisArray, *, out_size: int) -> None:
     """Populate the ``desc`` of *info* from *message*'s metadata.
 
-    Stamps two kinds of metadata onto the StreamInfo description:
-    well-known stream-level attrs (see :data:`_DESC_ATTR_KEYS`) and
+    Stamps two kinds of metadata onto the StreamInfo description: all
+    stream-level ``message.attrs`` as top-level desc XML elements, and
     per-channel labels / structured-array fields from a ``"ch"``
     CoordinateAxis.
     """
     desc = info.desc()
-    for key in _DESC_ATTR_KEYS:
-        if key in message.attrs:
-            desc.append_child_value(key, str(message.attrs[key]))
+    for key, value in message.attrs.items():
+        desc.append_child_value(str(key), str(value))
 
     # Add channel metadata to the info desc.
     if "ch" in message.axes and isinstance(message.axes["ch"], AxisArray.CoordinateAxis):
