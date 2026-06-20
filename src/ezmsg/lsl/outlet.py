@@ -100,6 +100,13 @@ class LSLOutletSettings(ez.Settings):
     Note: Ignored when use_message_timestamp is False.
     """
 
+    sync_blocking: bool = False
+    """
+    When `True`, the outlet is created with the `pylsl.transp_sync_blocking` transport flag, enabling the
+    synchronous (zero-copy) outlet mode for high-bandwidth streams. When `False` (default), the outlet uses
+    the standard asynchronous transport.
+    """
+
 
 @processor_state
 class LSLOutletProcessorState:
@@ -148,7 +155,8 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
             source_id="ezmsg-" + source_id,
         )
         populate_desc_from_axisarray(info, message, out_size=out_size)
-        self._state.outlet = pylsl.StreamOutlet(info)
+        transport_flags = pylsl.transp_sync_blocking if self.settings.sync_blocking else pylsl.transp_default
+        self._state.outlet = pylsl.StreamOutlet(info, transport_flags=transport_flags)
 
     def _process(self, message: AxisArray) -> None:
         dat = message.data
