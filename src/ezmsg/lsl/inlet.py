@@ -297,18 +297,26 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             key=inlet_info.name(),
         )
 
-    def _pull(self) -> typing.Optional[AxisArray]:
-        """Pull available data from the inlet. Non-blocking (timeout=0.0)."""
+    def _pull(self, timeout: float = 0.0) -> typing.Optional[AxisArray]:
+        """Pull available data from the inlet.
+
+        ``timeout`` is the liblsl pull_chunk timeout (max wait for the first
+        sample). Run via ``asyncio.to_thread`` with a small non-zero timeout so
+        the liblsl C call (which releases the GIL) executes on a worker thread,
+        keeping the event-loop thread free to service co-located units (e.g. an
+        outlet) — the first-data ``proc_ALL`` warmup otherwise stalls the loop.
+        """
         if self._state.inlet is None:
             return None
         try:
             if self._state.fetch_buffer is not None:
                 samples, timestamps = self._state.inlet.pull_chunk(
+                    timeout=timeout,
                     max_samples=self._state.fetch_buffer.shape[0],
                     dest_obj=self._state.fetch_buffer,
                 )
             else:
-                samples, timestamps = self._state.inlet.pull_chunk()
+                samples, timestamps = self._state.inlet.pull_chunk(timeout=timeout)
                 samples = np.array(samples)
         except Exception:
             # Stream may have been closed concurrently by shutdown.
