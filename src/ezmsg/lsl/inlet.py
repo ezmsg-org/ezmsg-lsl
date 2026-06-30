@@ -254,6 +254,8 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
 
     def _setup_after_open(self) -> None:
         """Configure fetch buffer and message template after a stream is opened."""
+        # Re-thread the first-data warmup on every (re)connect.
+        self._warmed_up = False
         # Resolver is no longer needed once connected. Destroy it now (while we're
         # in a background thread via _try_connect) so its destructor doesn't
         # run during shutdown.
@@ -362,7 +364,12 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         if self._state.inlet is None:
             return None
 
-        result = self._pull()
+        if not getattr(self, "_warmed_up", False):
+            result = await asyncio.to_thread(self._pull, 1.0)
+            if result is not None:
+                self._warmed_up = True
+            return result
+        result = self._pull()  # steady state: inline, non-blocking (timeout=0.0)
         if result is None:
             await asyncio.sleep(0.001)
         return result
