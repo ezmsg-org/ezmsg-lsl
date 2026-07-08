@@ -60,6 +60,55 @@ def test_inlet_producer():
             break
 
 
+def test_inlet_reconnect_on_settings_change():
+    """Pushing new settings that target a different stream must drop the old
+    inlet and reconnect to the new one.
+
+    Regression test: ``_reset_state`` previously recreated the resolver but
+    left ``_state.inlet`` pointing at the old connection, so ``_produce`` kept
+    pulling the original stream and a settings change appeared to do nothing.
+    Streams A and B differ in channel count, so the channel dimension tells us
+    which one the producer is actually pulling.
+    """
+    rate = 32.0
+    outlet_a = pylsl.StreamOutlet(
+        pylsl.StreamInfo(
+            name="dummyA", type="dummy", channel_count=8, nominal_srate=rate, channel_format=pylsl.cf_float32
+        )
+    )
+    outlet_b = pylsl.StreamOutlet(
+        pylsl.StreamInfo(
+            name="dummyB", type="dummy", channel_count=4, nominal_srate=rate, channel_format=pylsl.cf_float32
+        )
+    )
+
+    def push():
+        outlet_a.push_chunk(np.zeros((10, 8), dtype=np.float32))
+        outlet_b.push_chunk(np.ones((10, 4), dtype=np.float32))
+
+    producer = LSLInletProducer(info=LSLInfo(name="dummyA", type="dummy"))
+
+    phase = "A"  # currently expecting the 8-channel stream
+    reconnected = False
+    for count, msg in enumerate(producer):
+        push()
+        if count > 2000:
+            break
+        if msg is None or np.prod(msg.data.shape) == 0:
+            continue
+        if phase == "A":
+            # Once we've confirmed we're on A (8ch), retarget to B (4ch).
+            if msg.data.shape[1] == 8:
+                producer.update_settings(LSLInletSettings(info=LSLInfo(name="dummyB", type="dummy")))
+                phase = "B"
+        elif msg.data.shape[1] == 4:  # phase B: reconnected to the 4-channel stream
+            reconnected = True
+            break
+
+    assert phase == "B", "never connected to the initial stream A"
+    assert reconnected, "did not reconnect to stream B after the settings change"
+
+
 class DummyOutletSettings(ez.Settings):
     rate: float = 100.0
     n_chans: int = 8

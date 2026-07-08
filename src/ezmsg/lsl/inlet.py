@@ -187,6 +187,16 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         super().__init__(*args, settings=settings, **kwargs)
 
     def _reset_state(self) -> None:
+        # Drop any existing connection and its derived state so a settings
+        # change (e.g. a new target stream pushed via INPUT_SETTINGS) forces a
+        # fresh resolve/connect. Without this, `_produce` sees a non-None inlet
+        # and keeps pulling the previously-connected stream — the settings
+        # change would appear to do nothing. Dropping the StreamInlet reference
+        # closes it (liblsl cancellation ~500ms), matching `shutdown`.
+        self._state.inlet = None
+        self._state.msg_template = None
+        self._state.fetch_buffer = None
+        self._warmed_up = False
         self._state.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
         self._state.clock_sync = ClockSync()
 
