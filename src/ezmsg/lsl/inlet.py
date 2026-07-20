@@ -162,6 +162,35 @@ class LSLInletSettings(ez.Settings):
     Many users will want to set this to pylsl.proc_clocksync to disable dejittering.
     """
 
+    pull_timeout: float = 0.005
+    """
+    Seconds the steady-state ``pull_chunk`` blocks per iteration, on a worker
+    thread (``asyncio.to_thread``); the liblsl C call releases the GIL so the event
+    loop stays free while it waits. This replaces a fixed 1 ms busy-poll, cutting
+    idle CPU by running one blocking wait instead of ~1000 spins/second.
+
+    Interaction with ``max_pull_samples`` (see liblsl ``pull_chunk_multiplexed``,
+    which keeps pulling until ``max_samples`` is reached OR ``timeout`` elapses):
+    - ``max_pull_samples=1``: returns the instant one sample arrives, so timeout is
+      only the *idle* wait — set it large (e.g. 0.5) for minimal wakeups AND
+      minimal latency. This is the recommended config for latency-sensitive
+      low-rate streams (markers, cursor/pose driving control).
+    - ``max_pull_samples=None``: the pull batches for the *full* timeout, so the
+      value is also the delivery latency (measured: 5 ms -> ~6 ms, 100 ms ->
+      ~101 ms). Keep it small.
+    """
+
+    max_pull_samples: typing.Optional[int] = None
+    """
+    Cap on samples returned per ``pull_chunk`` (its ``max_samples`` argument).
+    ``None`` (default) fills the local buffer -- efficient batching for high-rate
+    streams, but combined with ``pull_timeout`` it waits the full timeout. Set to
+    ``1`` to return as soon as a single sample is available (near-zero latency on a
+    live stream); then a large ``pull_timeout`` is free. Do not set small values on
+    high-rate streams -- one sample per pull forces one message per sample and
+    floods the graph.
+    """
+
 
 @processor_state
 class LSLInletProducerState:
@@ -318,13 +347,21 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         """
         if self._state.inlet is None:
             return None
+        cap = self.settings.max_pull_samples
         try:
             if self._state.fetch_buffer is not None:
+                buf_samples = self._state.fetch_buffer.shape[0]
                 samples, timestamps = self._state.inlet.pull_chunk(
                     timeout=timeout,
-                    max_samples=self._state.fetch_buffer.shape[0],
+                    # max_samples=1 makes liblsl return the instant one sample
+                    # arrives (see pull_chunk_multiplexed) instead of blocking the
+                    # full timeout to batch — low latency with a large idle timeout.
+                    max_samples=min(buf_samples, cap) if cap else buf_samples,
                     dest_obj=self._state.fetch_buffer,
                 )
+            elif cap:
+                samples, timestamps = self._state.inlet.pull_chunk(timeout=timeout, max_samples=cap)
+                samples = np.array(samples)
             else:
                 samples, timestamps = self._state.inlet.pull_chunk(timeout=timeout)
                 samples = np.array(samples)
@@ -387,10 +424,11 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             if result is not None:
                 self._warmed_up = True
             return result
-        result = self._pull()  # steady state: inline, non-blocking (timeout=0.0)
-        if result is None:
-            await asyncio.sleep(0.001)
-        return result
+        # Steady state: block in liblsl on a worker thread up to `pull_timeout`.
+        # to_thread frees the event loop (the liblsl C call releases the GIL), and
+        # pull_chunk returns as soon as data arrives, so a large timeout only caps
+        # the idle wait.
+        return await asyncio.to_thread(self._pull, self.settings.pull_timeout)
 
     def shutdown(self) -> None:
         self._state.msg_template = None
