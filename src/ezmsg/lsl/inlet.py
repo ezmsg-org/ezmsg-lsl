@@ -162,33 +162,25 @@ class LSLInletSettings(ez.Settings):
     Many users will want to set this to pylsl.proc_clocksync to disable dejittering.
     """
 
-    pull_timeout: float = 0.005
+    pull_timeout: float = 0.1
     """
-    Seconds the steady-state ``pull_chunk`` blocks per iteration, on a worker
-    thread (``asyncio.to_thread``); the liblsl C call releases the GIL so the event
-    loop stays free while it waits. This replaces a fixed 1 ms busy-poll, cutting
-    idle CPU by running one blocking wait instead of ~1000 spins/second.
+    Maximum seconds to wait for the first sample during each steady-state pull.
+    Once a sample arrives, ``pull_chunk(min_samples=1)`` immediately drains any
+    other available samples up to ``max_pull_samples`` without waiting for the
+    buffer to fill. The 0.1 second default therefore reduces idle wakeups
+    without adding batching latency.
 
-    Interaction with ``max_pull_samples`` (see liblsl ``pull_chunk_multiplexed``,
-    which keeps pulling until ``max_samples`` is reached OR ``timeout`` elapses):
-    - ``max_pull_samples=1``: returns the instant one sample arrives, so timeout is
-      only the *idle* wait — set it large (e.g. 0.5) for minimal wakeups AND
-      minimal latency. This is the recommended config for latency-sensitive
-      low-rate streams (markers, cursor/pose driving control).
-    - ``max_pull_samples=None``: the pull batches for the *full* timeout, so the
-      value is also the delivery latency (measured: 5 ms -> ~6 ms, 100 ms ->
-      ~101 ms). Keep it small.
+    Pulling runs on a worker thread via ``asyncio.to_thread``; the liblsl C call
+    releases the GIL, so the event loop stays free while the inlet waits.
     """
 
     max_pull_samples: typing.Optional[int] = None
     """
-    Cap on samples returned per ``pull_chunk`` (its ``max_samples`` argument).
-    ``None`` (default) fills the local buffer -- efficient batching for high-rate
-    streams, but combined with ``pull_timeout`` it waits the full timeout. Set to
-    ``1`` to return as soon as a single sample is available (near-zero latency on a
-    live stream); then a large ``pull_timeout`` is free. Do not set small values on
-    high-rate streams -- one sample per pull forces one message per sample and
-    floods the graph.
+    Total cap on samples returned per ``pull_chunk``. ``None`` (default) uses the
+    full local fetch buffer. The inlet waits only for the first sample and then
+    drains immediately available data up to this cap; it does not wait for the
+    cap to be reached. A smaller value limits message size when clearing a large
+    backlog, but may split that backlog across successive messages.
     """
 
 
@@ -210,6 +202,20 @@ class LSLInletProducerState:
         self.hash = -1
 
 
+@dataclass(frozen=True)
+class _PullSnapshot:
+    """References and scalar settings used by one pull operation."""
+
+    inlet: pylsl.StreamInlet
+    fetch_buffer: typing.Optional[npt.NDArray]
+    clock_sync: ClockSync
+    msg_template: AxisArray
+    max_pull_samples: typing.Optional[int]
+    use_arrival_time: bool
+    use_lsl_clock: bool
+    nominal_srate: float
+
+
 class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[AxisArray], LSLInletProducerState]):
     def __init__(self, *args, settings: typing.Optional[LSLInletSettings] = None, **kwargs):
         kwargs = _sanitize_kwargs(kwargs)
@@ -220,8 +226,9 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         # change (e.g. a new target stream pushed via INPUT_SETTINGS) forces a
         # fresh resolve/connect. Without this, `_produce` sees a non-None inlet
         # and keeps pulling the previously-connected stream — the settings
-        # change would appear to do nothing. Dropping the StreamInlet reference
-        # closes it (liblsl cancellation ~500ms), matching `shutdown`.
+        # change would appear to do nothing. An in-flight pull snapshot keeps
+        # the old inlet and buffers alive until its bounded wait completes; its
+        # result is discarded by `_apull` once this live reference changes.
         self._state.inlet = None
         self._state.msg_template = None
         self._state.fetch_buffer = None
@@ -336,73 +343,108 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             key=inlet_info.name(),
         )
 
-    def _pull(self, timeout: float = 0.0) -> typing.Optional[AxisArray]:
+    def _snapshot_pull_state(self) -> typing.Optional[_PullSnapshot]:
+        """Capture strong references needed by a pull before entering a worker."""
+        state = self._state
+        if state.inlet is None or state.clock_sync is None or state.msg_template is None:
+            return None
+
+        settings = self.settings
+        return _PullSnapshot(
+            inlet=state.inlet,
+            fetch_buffer=state.fetch_buffer,
+            clock_sync=state.clock_sync,
+            msg_template=state.msg_template,
+            max_pull_samples=settings.max_pull_samples,
+            use_arrival_time=settings.use_arrival_time,
+            use_lsl_clock=settings.use_lsl_clock,
+            nominal_srate=settings.info.nominal_srate,
+        )
+
+    def _pull(self, snapshot: _PullSnapshot, timeout: float = 0.0) -> typing.Optional[AxisArray]:
         """Pull available data from the inlet.
 
-        ``timeout`` is the liblsl pull_chunk timeout (max wait for the first
-        sample). Run via ``asyncio.to_thread`` with a small non-zero timeout so
-        the liblsl C call (which releases the GIL) executes on a worker thread,
-        keeping the event-loop thread free to service co-located units (e.g. an
-        outlet) — the first-data ``proc_ALL`` warmup otherwise stalls the loop.
+        ``timeout`` is the maximum wait for the first sample. ``min_samples=1``
+        then makes pylsl drain whatever else is immediately available, up to the
+        configured cap, without waiting for the remainder of the chunk. Run via
+        ``asyncio.to_thread`` so the event-loop thread remains free to service
+        co-located units while liblsl waits.
         """
-        if self._state.inlet is None:
-            return None
-        cap = self.settings.max_pull_samples
+        inlet = snapshot.inlet
+        fetch_buffer = snapshot.fetch_buffer
+        cap = snapshot.max_pull_samples
         try:
-            if self._state.fetch_buffer is not None:
-                buf_samples = self._state.fetch_buffer.shape[0]
-                samples, timestamps = self._state.inlet.pull_chunk(
+            if fetch_buffer is not None:
+                buf_samples = fetch_buffer.shape[0]
+                samples, timestamps = inlet.pull_chunk(
                     timeout=timeout,
-                    # max_samples=1 makes liblsl return the instant one sample
-                    # arrives (see pull_chunk_multiplexed) instead of blocking the
-                    # full timeout to batch — low latency with a large idle timeout.
                     max_samples=min(buf_samples, cap) if cap else buf_samples,
-                    dest_obj=self._state.fetch_buffer,
+                    dest_obj=fetch_buffer,
+                    min_samples=1,
                 )
             elif cap:
-                samples, timestamps = self._state.inlet.pull_chunk(timeout=timeout, max_samples=cap)
+                samples, timestamps = inlet.pull_chunk(
+                    timeout=timeout,
+                    max_samples=cap,
+                    min_samples=1,
+                )
                 samples = np.array(samples)
             else:
-                samples, timestamps = self._state.inlet.pull_chunk(timeout=timeout)
+                samples, timestamps = inlet.pull_chunk(timeout=timeout, min_samples=1)
                 samples = np.array(samples)
         except Exception:
-            # Stream may have been closed concurrently by shutdown.
+            # The remote stream may have been lost or the inlet closed externally.
             return None
 
         if not len(timestamps):
             return None
 
-        data = self._state.fetch_buffer[: len(timestamps)].copy() if samples is None else samples
+        data = fetch_buffer[: len(timestamps)].copy() if samples is None else samples
 
         # `timestamps` is currently in the LSL clock stamped by the sender.
-        if self.settings.use_arrival_time:
+        if snapshot.use_arrival_time:
             # Drop the sender stamps; use "now". Useful when playing back old XDF files.
             timestamps = time.monotonic() - (timestamps - timestamps[0])
-            if self.settings.use_lsl_clock:
-                timestamps = self._state.clock_sync.system2lsl(timestamps)
-        elif not self.settings.use_lsl_clock:
+            if snapshot.use_lsl_clock:
+                timestamps = snapshot.clock_sync.system2lsl(timestamps)
+        elif not snapshot.use_lsl_clock:
             # Keep the sender clock but convert to system time.
-            timestamps = self._state.clock_sync.lsl2system(timestamps)
+            timestamps = snapshot.clock_sync.lsl2system(timestamps)
 
-        if self.settings.info.nominal_srate <= 0.0:
+        if snapshot.nominal_srate <= 0.0:
             # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
             out_time_ax = replace(
-                self._state.msg_template.axes["time"],
+                snapshot.msg_template.axes["time"],
                 data=np.array(timestamps),
             )
         else:
             # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
-            out_time_ax = replace(self._state.msg_template.axes["time"], offset=timestamps[0])
+            out_time_ax = replace(snapshot.msg_template.axes["time"], offset=timestamps[0])
 
         out_msg = replace(
-            self._state.msg_template,
+            snapshot.msg_template,
             data=data,
             axes={
-                **self._state.msg_template.axes,
+                **snapshot.msg_template.axes,
                 "time": out_time_ax,
             },
         )
         return out_msg
+
+    async def _apull(self, timeout: float = 0.0) -> typing.Optional[AxisArray]:
+        """Pull on a worker and discard data from an inlet replaced meanwhile."""
+        snapshot = self._snapshot_pull_state()
+        if snapshot is None:
+            return None
+
+        result = await asyncio.to_thread(self._pull, snapshot, timeout)
+
+        # Reset and shutdown invalidate the live inlet. The snapshot keeps the
+        # old inlet and its buffers alive until the worker has safely returned,
+        # but data from that old connection must not be published.
+        if self._state.inlet is not snapshot.inlet:
+            return None
+        return result
 
     async def _produce(self) -> typing.Optional[AxisArray]:
         if self._state.inlet is None:
@@ -420,22 +462,22 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             return None
 
         if not getattr(self, "_warmed_up", False):
-            result = await asyncio.to_thread(self._pull, 1.0)
+            result = await self._apull(1.0)
             if result is not None:
                 self._warmed_up = True
             return result
         # Steady state: block in liblsl on a worker thread up to `pull_timeout`.
-        # to_thread frees the event loop (the liblsl C call releases the GIL), and
-        # pull_chunk returns as soon as data arrives, so a large timeout only caps
-        # the idle wait.
-        return await asyncio.to_thread(self._pull, self.settings.pull_timeout)
+        # min_samples=1 returns as soon as data arrives and then drains whatever
+        # is available, so a large timeout only caps the idle wait.
+        return await self._apull(self.settings.pull_timeout)
 
     def shutdown(self) -> None:
+        # Invalidate in-flight pulls and release the live state. A pull snapshot
+        # retains these objects until its bounded wait safely completes, after
+        # which `_apull` discards its stale result.
+        self._state.inlet = None
         self._state.msg_template = None
         self._state.fetch_buffer = None
-        # StreamInlet cleanup takes ~500ms (liblsl cancellation logic).
-        # This is acceptable; the ezmsg core handles SIGINT during shutdown.
-        self._state.inlet = None
         # ClockSync is a singleton shared across all LSL units in the process.
         # Don't stop() it — just drop our reference.
         self._state.clock_sync = None

@@ -5,6 +5,7 @@ This code exists mostly to use during development and debugging.
 
 import asyncio
 import tempfile
+import threading
 import typing
 from pathlib import Path
 
@@ -24,6 +25,88 @@ def test_inlet_init_defaults():
     settings = LSLInletSettings(info=LSLInfo(name="", type=""))
     _ = LSLInletUnit(settings)
     assert True
+
+
+@pytest.mark.parametrize(
+    "buffer_size,cap,expected_max_samples",
+    [
+        (8, None, 8),
+        (8, 3, 3),
+        (None, 3, 3),
+        (None, None, None),
+    ],
+)
+def test_inlet_pull_waits_for_one_then_drains(
+    buffer_size: typing.Optional[int],
+    cap: typing.Optional[int],
+    expected_max_samples: typing.Optional[int],
+):
+    class RecordingInlet:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def pull_chunk(self, **kwargs):
+            self.calls.append(kwargs)
+            return (None if "dest_obj" in kwargs else []), []
+
+    producer = LSLInletProducer(settings=LSLInletSettings(max_pull_samples=cap))
+    inlet = RecordingInlet()
+    producer._state.inlet = inlet
+    producer._state.clock_sync = object()
+    producer._state.msg_template = object()
+    if buffer_size is not None:
+        producer._state.fetch_buffer = np.zeros((buffer_size, 2), dtype=np.float32)
+
+    assert asyncio.run(producer._apull(timeout=0.25)) is None
+
+    assert len(inlet.calls) == 1
+    call = inlet.calls[0]
+    assert call["timeout"] == 0.25
+    assert call["min_samples"] == 1
+    if expected_max_samples is None:
+        assert "max_samples" not in call
+    else:
+        assert call["max_samples"] == expected_max_samples
+    if buffer_size is None:
+        assert "dest_obj" not in call
+    else:
+        assert call["dest_obj"] is producer._state.fetch_buffer
+
+
+def test_inlet_pull_snapshot_survives_shutdown_and_discards_stale_result(monkeypatch):
+    producer = LSLInletProducer(settings=LSLInletSettings())
+    inlet = object()
+    fetch_buffer = np.zeros((8, 2), dtype=np.float32)
+    msg_template = object()
+    clock_sync = object()
+    producer._state.inlet = inlet
+    producer._state.fetch_buffer = fetch_buffer
+    producer._state.msg_template = msg_template
+    producer._state.clock_sync = clock_sync
+
+    pull_started = threading.Event()
+    release_pull = threading.Event()
+    stale_result = object()
+
+    def blocking_pull(snapshot, timeout):
+        assert snapshot.inlet is inlet
+        assert snapshot.fetch_buffer is fetch_buffer
+        assert snapshot.msg_template is msg_template
+        assert snapshot.clock_sync is clock_sync
+        pull_started.set()
+        assert release_pull.wait(timeout=1.0)
+        return stale_result
+
+    monkeypatch.setattr(producer, "_pull", blocking_pull)
+
+    async def run_test():
+        pull_task = asyncio.create_task(producer._apull(timeout=0.1))
+        assert await asyncio.to_thread(pull_started.wait, 1.0)
+        producer.shutdown()
+        release_pull.set()
+        assert await pull_task is None
+
+    asyncio.run(run_test())
 
 
 def test_inlet_producer():
