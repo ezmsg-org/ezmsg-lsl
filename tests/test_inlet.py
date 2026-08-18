@@ -295,3 +295,143 @@ def test_inlet_comps_conns(rate: float):
 
     # We merely verify that the messages are being sent to the logger.
     assert len(messages) >= n_messages
+
+
+class _FakeStreamInfo:
+    """Just enough of pylsl.StreamInfo for _setup_after_open."""
+
+    def __init__(self, name="CURSOR_PLAN", stype="BCIPlan", host="rpi5", n_ch=2, srate=50.0):
+        self._name, self._type, self._host = name, stype, host
+        self._n_ch, self._srate = n_ch, srate
+
+    def name(self):
+        return self._name
+
+    def type(self):
+        return self._type
+
+    def hostname(self):
+        return self._host
+
+    def channel_count(self):
+        return self._n_ch
+
+    def nominal_srate(self):
+        return self._srate
+
+    def channel_format(self):
+        return pylsl.cf_float32
+
+    def desc(self):
+        return _FakeXML()
+
+
+class _FakeXML:
+    def child(self, _name):
+        return self
+
+    def empty(self):
+        return True
+
+
+def test_inlet_logs_the_stream_it_resolved(caplog):
+    producer = LSLInletProducer(settings=LSLInletSettings(info=LSLInfo(name="CURSOR_PLAN", type="BCIPlan")))
+    producer._state.inlet = type("I", (), {"info": lambda _self: _FakeStreamInfo()})()
+
+    with caplog.at_level("INFO"):
+        producer._setup_after_open()
+
+    assert "CURSOR_PLAN" in caplog.text
+    assert "BCIPlan" in caplog.text
+    assert "rpi5" in caplog.text
+
+
+def test_inlet_logs_once_when_no_stream_matches(caplog):
+    producer = LSLInletProducer(settings=LSLInletSettings(info=LSLInfo(name="CURSOR_PLAN", type="BCIPlan")))
+    producer._state.clock_sync = None
+
+    async def run_test():
+        for _ in range(3):
+            assert await producer._produce() is None
+
+    with caplog.at_level("INFO"):
+        asyncio.run(run_test())
+
+    searching = [r for r in caplog.records if "still looking" in r.message]
+    assert len(searching) == 1
+    # Names what it wanted, so a typo'd stream name is legible from the log.
+    assert "CURSOR_PLAN" in searching[0].getMessage()
+
+
+def test_a_reconnect_can_log_again(caplog):
+    """The log-once flags describe one connection, not the process lifetime."""
+    producer = LSLInletProducer(settings=LSLInletSettings(info=LSLInfo(name="CURSOR_PLAN", type="BCIPlan")))
+    producer._logged_searching = True
+    producer._logged_lost = True
+
+    producer._state.inlet = type("I", (), {"info": lambda _self: _FakeStreamInfo()})()
+    producer._setup_after_open()
+    assert producer._logged_searching is False
+    assert producer._logged_lost is False
+
+    producer._state.clock_sync = None
+    producer._state.inlet = None
+
+    async def run_test():
+        assert await producer._produce() is None
+
+    with caplog.at_level("INFO"):
+        asyncio.run(run_test())
+
+    assert any("still looking" in r.message for r in caplog.records)
+
+
+def test_inlet_logs_a_lost_stream_once(caplog):
+    class RaisingInlet:
+        def pull_chunk(self, **_kwargs):
+            raise RuntimeError("stream lost")
+
+    producer = LSLInletProducer(settings=LSLInletSettings())
+    inlet = RaisingInlet()
+    producer._state.inlet = inlet
+    producer._state.clock_sync = object()
+    producer._state.msg_template = AxisArray(
+        data=np.empty((0, 2)),
+        dims=["time", "ch"],
+        axes={"time": AxisArray.TimeAxis(fs=50.0)},
+        key="CURSOR_PLAN",
+    )
+
+    with caplog.at_level("INFO"):
+        for _ in range(3):
+            assert asyncio.run(producer._apull(timeout=0.0)) is None
+
+    lost = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(lost) == 1
+    assert "CURSOR_PLAN" in lost[0].getMessage()
+
+
+def test_a_pull_racing_shutdown_is_not_reported_as_a_lost_stream(caplog):
+    """A pull raising on a handle shutdown() already dropped is teardown, not loss."""
+
+    class RaisingInlet:
+        def pull_chunk(self, **_kwargs):
+            raise RuntimeError("inlet closed")
+
+    producer = LSLInletProducer(settings=LSLInletSettings())
+    snapshot_inlet = RaisingInlet()
+    producer._state.inlet = snapshot_inlet
+    producer._state.clock_sync = object()
+    producer._state.msg_template = AxisArray(
+        data=np.empty((0, 2)),
+        dims=["time", "ch"],
+        axes={"time": AxisArray.TimeAxis(fs=50.0)},
+        key="CURSOR_PLAN",
+    )
+    snapshot = producer._snapshot_pull_state()
+    producer.shutdown()
+
+    with caplog.at_level("INFO"):
+        assert producer._pull(snapshot, timeout=0.0) is None
+
+    assert [r for r in caplog.records if r.levelname == "WARNING"] == []
