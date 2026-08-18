@@ -118,6 +118,17 @@ class LSLInfo:
     channel_format: typing.Optional[str] = None
 
 
+def _describe_target(info: LSLInfo) -> str:
+    """Human-readable form of what an inlet is looking for, for log messages."""
+    named = (("name", info.name), ("type", info.type), ("host", info.host))
+    parts = [f"{key}={value!r}" for key, value in named if value]
+    if info.channel_count is not None:
+        parts.append(f"channel_count={info.channel_count}")
+    if info.channel_format is not None:
+        parts.append(f"channel_format={info.channel_format!r}")
+    return ", ".join(parts) if parts else "any stream"
+
+
 def _sanitize_kwargs(kwargs: dict) -> dict:
     if "info" not in kwargs:
         replace_keys = set()
@@ -219,6 +230,9 @@ class _PullSnapshot:
 class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[AxisArray], LSLInletProducerState]):
     def __init__(self, *args, settings: typing.Optional[LSLInletSettings] = None, **kwargs):
         kwargs = _sanitize_kwargs(kwargs)
+        # Also set in _reset_state, which only runs on the first __acall__.
+        self._logged_searching = False
+        self._logged_lost = False
         super().__init__(*args, settings=settings, **kwargs)
 
     def _reset_state(self) -> None:
@@ -233,6 +247,9 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._state.msg_template = None
         self._state.fetch_buffer = None
         self._warmed_up = False
+        # Log-once flags: both conditions are polled every tick, so log on transition only.
+        self._logged_searching = False
+        self._logged_lost = False
         self._state.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
         self._state.clock_sync = ClockSync()
 
@@ -307,12 +324,26 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         # run during shutdown.
         self._state.resolver = None
 
+        self._logged_searching = False
+        self._logged_lost = False
+
         inlet_info = self._state.inlet.info()
         # Fill in nominal_srate on settings (it may have been left at default).
         self.settings.info.nominal_srate = inlet_info.nominal_srate()
         # If possible, create a destination buffer for faster pulls.
         fmt = inlet_info.channel_format()
         n_ch = inlet_info.channel_count()
+
+        # Name the resolved stream: resolution can cross machines and find the
+        # wrong one, which otherwise looks like a stream that is merely quiet.
+        ez.logger.info(
+            "LSL inlet connected to name=%r type=%r on host %r: %d ch @ %g Hz",
+            inlet_info.name(),
+            inlet_info.type(),
+            inlet_info.hostname(),
+            n_ch,
+            inlet_info.nominal_srate(),
+        )
         if fmt in fmt2npdtype:
             dtype = fmt2npdtype[fmt]
             n_buff = int(self.settings.local_buffer_dur * inlet_info.nominal_srate()) or 1000
@@ -394,6 +425,15 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
                 samples = np.array(samples)
         except Exception:
             # The remote stream may have been lost or the inlet closed externally.
+            # Log once per connection; stay quiet if this inlet is no longer the
+            # live one, which is shutdown or reset racing an in-flight pull.
+            if not self._logged_lost and self._state.inlet is inlet:
+                self._logged_lost = True
+                ez.logger.warning(
+                    "LSL inlet pull failed for %r; the stream may have been lost.",
+                    snapshot.msg_template.key,
+                    exc_info=True,
+                )
             return None
 
         if not len(timestamps):
@@ -450,6 +490,14 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         if self._state.inlet is None:
             await asyncio.to_thread(self._try_connect)
             if self._state.inlet is None:
+                # Said once, on the first failed attempt. This line without a
+                # later "connected" line is the diagnosis.
+                if not self._logged_searching:
+                    self._logged_searching = True
+                    ez.logger.info(
+                        "LSL inlet found no stream matching %s; still looking.",
+                        _describe_target(self.settings.info),
+                    )
                 await asyncio.sleep(0.01)
                 return None
 
