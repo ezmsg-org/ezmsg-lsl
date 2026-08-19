@@ -118,6 +118,22 @@ class LSLInfo:
     channel_format: typing.Optional[str] = None
 
 
+# Never let liblsl recover a lost stream on its own. Its recovery matches on
+# source_id alone, so it ignores the `host` criterion and can silently re-attach
+# to a same-named stream on a different machine; it also retries forever, so an
+# upstream that returns with a different shape is never found and the inlet
+# stalls silently. Reconnecting here instead costs no data -- a dropped
+# connection discards the outlet's per-consumer queue either way -- and makes
+# the loss observable. See `_produce`.
+_RECOVER = False
+
+# Bound on fetching the full StreamInfo after opening. The description arrives
+# over the wire (discovery results carry only the bare fields), and pylsl would
+# otherwise wait forever, stranding a connect attempt that can no longer be
+# cancelled.
+_INFO_TIMEOUT = 5.0
+
+
 def _describe_target(info: LSLInfo) -> str:
     """Human-readable form of what an inlet is looking for, for log messages."""
     named = (("name", info.name), ("type", info.type), ("host", info.host))
@@ -194,6 +210,37 @@ class LSLInletSettings(ez.Settings):
     backlog, but may split that backlog across successive messages.
     """
 
+    reconnect_grace_dur: float = 5.0
+    """
+    Seconds after losing a stream during which only the *same* stream (matching
+    ``source_id``) is accepted. Afterwards any stream matching ``info`` is taken.
+
+    This reproduces liblsl's own recovery, which re-acquires by ``source_id``
+    alone, but bounds it: liblsl retries indefinitely, so an upstream that comes
+    back with a different shape (and therefore a different ``source_id``) would
+    never be found. The grace period prefers the original stream while it might
+    still be coming back, then falls back to the resolver criteria so a
+    restarted, reconfigured upstream is picked up. Set to 0 to always take the
+    first match; the ``host`` criterion is honoured either way, which liblsl's
+    recovery does not do.
+    """
+
+    distinct_key_per_connection: bool = False
+    """
+    Whether ``key`` gains a ``#<n>`` suffix that increments each time the inlet
+    attaches to a *different outlet instance* (a changed StreamInfo ``uid``).
+
+    Downstream processors key their state on ``(shape, rate, key)``, so a
+    restarted upstream that keeps the same name and shape is otherwise invisible
+    to them: filter state and partial windows carry across the discontinuity as
+    if no gap occurred. Enabling this forces those resets.
+
+    Off by default because it changes the identity that ``key`` denotes: NWB
+    writers name containers by it and pipelines route on it, so a reconnect would
+    fork the recording. A dropped socket that re-attaches to the *same* outlet
+    instance never bumps the suffix, so a brief blip preserves state either way.
+    """
+
 
 @processor_state
 class LSLInletProducerState:
@@ -233,7 +280,28 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         # Also set in _reset_state, which only runs on the first __acall__.
         self._logged_searching = False
         self._logged_lost = False
+        self._lost = False
+        # Describes the *previous* connection, so unlike the flags above these
+        # deliberately survive _reset_state -- that reset is how a reconnect
+        # happens, and comparing against the old stream is the point.
+        self._connection_epoch = 0
+        self._last_uid: typing.Optional[str] = None
+        self._last_source_id: typing.Optional[str] = None
+        self._last_signature: typing.Optional[tuple] = None
+        self._reconnect_source_id: typing.Optional[str] = None
+        self._reconnect_deadline = 0.0
         super().__init__(*args, settings=settings, **kwargs)
+
+    def update_settings(self, new_settings: LSLInletSettings) -> None:
+        # New settings may retarget the inlet entirely, so holding out for the
+        # previous stream's source_id would delay connecting to the one just
+        # asked for. Both paths reach _reset_state, hence clearing it here.
+        self._clear_reconnect_preference()
+        super().update_settings(new_settings)
+
+    def _clear_reconnect_preference(self) -> None:
+        self._reconnect_source_id = None
+        self._reconnect_deadline = 0.0
 
     def _reset_state(self) -> None:
         # Drop any existing connection and its derived state so a settings
@@ -250,6 +318,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         # Log-once flags: both conditions are polled every tick, so log on transition only.
         self._logged_searching = False
         self._logged_lost = False
+        self._lost = False
         self._state.resolver = pylsl.ContinuousResolver(pred=None, forget_after=30.0)
         self._state.clock_sync = ClockSync()
 
@@ -277,46 +346,75 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
                 channel_count=info.channel_count,
                 channel_format=info.channel_format,
             )
-            inlet = pylsl.StreamInlet(strm_info, max_chunklen=1, processing_flags=self.settings.processing_flags)
+            inlet = pylsl.StreamInlet(
+                strm_info,
+                max_chunklen=1,
+                recover=_RECOVER,
+                processing_flags=self.settings.processing_flags,
+            )
             try:
                 inlet.open_stream(timeout=2.0)
             except (pylsl.util.TimeoutError, pylsl.util.LostError):
                 return
             self._state.inlet = inlet
-            self._setup_after_open()
+            if not self._setup_after_open():
+                self._state.inlet = None
             return
 
         # Resolver-based path: match on whichever fields are provided.
         if self._state.resolver is None:
             return
         results: list[pylsl.StreamInfo] = self._state.resolver.results()
-        for strm_info in results:
-            b_match = True
-            b_match = b_match and ((not info.name) or strm_info.name() == info.name)
-            b_match = b_match and ((not info.type) or strm_info.type() == info.type)
-            b_match = b_match and ((not info.host) or strm_info.hostname() == info.host)
-            if info.channel_count is not None:
-                b_match = b_match and strm_info.channel_count() == info.channel_count
-            if info.channel_format is not None:
-                expected_cf = _string2cf.get(info.channel_format)
-                if expected_cf is not None:
-                    b_match = b_match and strm_info.channel_format() == expected_cf
-            if b_match:
-                self._open_inlet(strm_info)
-                break
+        matches = [strm_info for strm_info in results if self._matches_criteria(strm_info)]
+        if not matches:
+            return
+
+        # Within the grace window after a loss, hold out for the stream we were
+        # on. Matching on source_id is what liblsl's own recovery does; doing it
+        # here keeps the `host` criterion applied, which that recovery ignores.
+        if self._reconnect_source_id and time.monotonic() < self._reconnect_deadline:
+            same_source = [_ for _ in matches if _.source_id() == self._reconnect_source_id]
+            if not same_source:
+                return
+            matches = same_source
+
+        self._open_inlet(matches[0])
+
+    def _matches_criteria(self, strm_info: pylsl.StreamInfo) -> bool:
+        """Whether a discovered stream satisfies every field set on ``settings.info``."""
+        info = self.settings.info
+        if info.name and strm_info.name() != info.name:
+            return False
+        if info.type and strm_info.type() != info.type:
+            return False
+        if info.host and strm_info.hostname() != info.host:
+            return False
+        if info.channel_count is not None and strm_info.channel_count() != info.channel_count:
+            return False
+        if info.channel_format is not None:
+            expected_cf = _string2cf.get(info.channel_format)
+            if expected_cf is not None and strm_info.channel_format() != expected_cf:
+                return False
+        return True
 
     def _open_inlet(self, strm_info: pylsl.StreamInfo) -> None:
         """Create a StreamInlet from a discovered StreamInfo and set up buffers/template."""
         self._state.inlet = pylsl.StreamInlet(
             strm_info,
             max_chunklen=1,
+            recover=_RECOVER,
             processing_flags=self.settings.processing_flags,
         )
         self._state.inlet.open_stream(timeout=5.0)
-        self._setup_after_open()
+        if not self._setup_after_open():
+            self._state.inlet = None
 
-    def _setup_after_open(self) -> None:
-        """Configure fetch buffer and message template after a stream is opened."""
+    def _setup_after_open(self) -> bool:
+        """Configure fetch buffer and message template after a stream is opened.
+
+        Returns False if the stream's full description could not be fetched, in
+        which case the caller drops the inlet and the connect is retried.
+        """
         # Re-thread the first-data warmup on every (re)connect.
         self._warmed_up = False
         # Resolver is no longer needed once connected. Destroy it now (while we're
@@ -327,12 +425,30 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._logged_searching = False
         self._logged_lost = False
 
-        inlet_info = self._state.inlet.info()
+        try:
+            inlet_info = self._state.inlet.info(timeout=_INFO_TIMEOUT)
+        except (pylsl.util.TimeoutError, pylsl.util.LostError) as exc:
+            ez.logger.warning("LSL inlet could not fetch the stream description (%s); retrying.", exc)
+            return False
+
         # Fill in nominal_srate on settings (it may have been left at default).
         self.settings.info.nominal_srate = inlet_info.nominal_srate()
         # If possible, create a destination buffer for faster pulls.
         fmt = inlet_info.channel_format()
         n_ch = inlet_info.channel_count()
+
+        # `uid` identifies the outlet *instance* and is regenerated whenever an
+        # outlet is constructed, so it -- not `source_id`, which is deliberately
+        # stable across restarts so consumers can re-acquire -- is what tells a
+        # dropped socket apart from a restarted upstream.
+        uid = inlet_info.uid()
+        source_id = inlet_info.source_id()
+        hostname = inlet_info.hostname()
+        if self._last_uid is not None and uid != self._last_uid:
+            self._connection_epoch += 1
+        self._last_uid = uid
+        self._last_source_id = source_id
+        self._clear_reconnect_preference()
 
         # Name the resolved stream: resolution can cross machines and find the
         # wrong one, which otherwise looks like a stream that is merely quiet.
@@ -340,10 +456,27 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             "LSL inlet connected to name=%r type=%r on host %r: %d ch @ %g Hz",
             inlet_info.name(),
             inlet_info.type(),
-            inlet_info.hostname(),
+            hostname,
             n_ch,
             inlet_info.nominal_srate(),
         )
+
+        # A reconnect that lands on a different shape or a different machine is
+        # still a valid match on the configured criteria, so nothing else will
+        # complain -- but it silently changes what the data means.
+        signature = (n_ch, fmt, inlet_info.nominal_srate(), hostname)
+        if self._last_signature is not None and signature != self._last_signature:
+            changes = [
+                f"{label}: {old!r} -> {new!r}"
+                for label, old, new in zip(
+                    ("channel_count", "channel_format", "nominal_srate", "host"),
+                    self._last_signature,
+                    signature,
+                )
+                if old != new
+            ]
+            ez.logger.warning("LSL inlet reconnected to a changed stream (%s).", "; ".join(changes))
+        self._last_signature = signature
         if fmt in fmt2npdtype:
             dtype = fmt2npdtype[fmt]
             n_buff = int(self.settings.local_buffer_dur * inlet_info.nominal_srate()) or 1000
@@ -367,12 +500,22 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         time_ax = (
             AxisArray.TimeAxis(fs=fs) if fs else AxisArray.CoordinateAxis(data=np.array([]), dims=["time"], unit="s")
         )
+        # Epoch 0 renders as the bare name so the common case is unchanged.
+        key = inlet_info.name()
+        if self.settings.distinct_key_per_connection and self._connection_epoch:
+            key = f"{key}#{self._connection_epoch}"
         self._state.msg_template = AxisArray(
             data=np.empty((0, n_ch)),
             dims=["time", "ch"],
             axes={"time": time_ax, "ch": ch_ax},
-            key=inlet_info.name(),
+            key=key,
+            attrs={
+                "lsl_uid": uid,
+                "lsl_source_id": source_id,
+                "lsl_hostname": hostname,
+            },
         )
+        return True
 
     def _snapshot_pull_state(self) -> typing.Optional[_PullSnapshot]:
         """Capture strong references needed by a pull before entering a worker."""
@@ -423,14 +566,33 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             else:
                 samples, timestamps = inlet.pull_chunk(timeout=timeout, min_samples=1)
                 samples = np.array(samples)
+        except pylsl.util.LostError:
+            # Terminal for this connection: liblsl only raises this once the
+            # stream is gone for good (`recover=False`), and every later pull
+            # raises too. Flag it for `_produce` to act on rather than tearing
+            # down here -- this runs on a worker thread.
+            #
+            # Nothing is salvageable at this point. liblsl checks the lost state
+            # before draining, so buffered samples are unreachable even though
+            # `samples_available()` still counts them.
+            if self._state.inlet is inlet:
+                self._lost = True
+                if not self._logged_lost:
+                    self._logged_lost = True
+                    ez.logger.warning(
+                        "LSL inlet lost the stream %r; will re-resolve.",
+                        snapshot.msg_template.key,
+                    )
+            return None
         except Exception:
-            # The remote stream may have been lost or the inlet closed externally.
-            # Log once per connection; stay quiet if this inlet is no longer the
-            # live one, which is shutdown or reset racing an in-flight pull.
+            # Some other failure -- a closed handle, a malformed chunk. Not known
+            # to be terminal, so keep pulling. Log once per connection; stay quiet
+            # if this inlet is no longer the live one, which is shutdown or reset
+            # racing an in-flight pull.
             if not self._logged_lost and self._state.inlet is inlet:
                 self._logged_lost = True
                 ez.logger.warning(
-                    "LSL inlet pull failed for %r; the stream may have been lost.",
+                    "LSL inlet pull failed for %r.",
                     snapshot.msg_template.key,
                     exc_info=True,
                 )
@@ -487,6 +649,19 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         return result
 
     async def _produce(self) -> typing.Optional[AxisArray]:
+        if self._lost:
+            # `_reset_state` already drops the inlet, its buffers and template,
+            # and rebuilds the ContinuousResolver that `_setup_after_open`
+            # destroyed -- exactly the teardown a reconnect needs. Requesting a
+            # reset runs it at the top of the next `__acall__`, on this thread.
+            # The old inlet is released rather than closed, so an in-flight pull
+            # holding it via its snapshot stays valid until it returns.
+            self._lost = False
+            self._reconnect_source_id = self._last_source_id or None
+            self._reconnect_deadline = time.monotonic() + self.settings.reconnect_grace_dur
+            self._request_reset()
+            return None
+
         if self._state.inlet is None:
             await asyncio.to_thread(self._try_connect)
             if self._state.inlet is None:
