@@ -7,7 +7,8 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "ezmsg>=3.9.0",
+    # 3.10.0b2 for AxisArray.chunk_dim and CoordinateAxis.fingerprint.
+    "ezmsg>=3.10.0b2",
     "ezmsg-baseproc>=1.7.0",
     "numpy>=1.26.4",
     "pylsl>=1.18.4b1",
