@@ -495,6 +495,13 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             # No structured metadata — fall back to numeric string labels.
             ch_labels = [str(i + 1) for i in range(n_ch)]
             ch_ax = AxisArray.CoordinateAxis(data=np.array(ch_labels), dims=["ch"])
+        # Compute the channel fingerprint once, now. It is cached on the axis and
+        # pickled with it, and every message from this connection reuses this same
+        # axis object, so one checksum covers the whole stream. Left cold it would
+        # be computed by the first stateful consumer in this process -- and, since
+        # unpickling builds a new axis object per message, by the first consumer in
+        # every other process, on every message, until the inlet reconnects.
+        ch_ax.fingerprint
         # Pre-allocate a message template.
         fs = inlet_info.nominal_srate()
         time_ax = (
@@ -509,6 +516,12 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             dims=["time", "ch"],
             axes={"time": time_ax, "ch": ch_ax},
             key=key,
+            # Messages append along `time` whether the stream is regular (a
+            # LinearAxis whose offset advances) or irregular (a CoordinateAxis of
+            # per-sample timestamps). Either way its extent is just however many
+            # samples arrived, and consumers must leave it out of the state they
+            # cache against the stream's configuration.
+            chunk_dim="time",
             attrs={
                 "lsl_uid": uid,
                 "lsl_source_id": source_id,

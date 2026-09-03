@@ -390,6 +390,50 @@ def test_inlet_stamps_stream_identity_onto_every_message():
     assert attrs["lsl_hostname"] == "rpi5"
 
 
+class TestTheTemplateIsReadyForConsumers:
+    """Two things only the source can supply, both set once per connection.
+
+    ``chunk_dim`` names the dimension messages append along -- the one whose
+    length is just however many samples arrived, and which a consumer must
+    therefore leave out of the state it caches against the stream's
+    configuration. ``fingerprint`` is the channel axis's content digest, cached
+    on the axis and pickled with it, so priming it here spares the first
+    consumer in every process from recomputing it on every message.
+    """
+
+    @pytest.mark.parametrize("srate", [50.0, 0.0], ids=["regular", "irregular"])
+    def test_the_template_declares_its_chunk_dim(self, srate):
+        producer = LSLInletProducer(settings=LSLInletSettings())
+        _connect(producer, _FakeStreamInfo(srate=srate))
+        assert producer._state.msg_template.chunk_dim == "time"
+
+    @pytest.mark.parametrize("srate", [50.0, 0.0], ids=["regular", "irregular"])
+    def test_the_channel_axis_carries_its_fingerprint(self, srate):
+        producer = LSLInletProducer(settings=LSLInletSettings())
+        _connect(producer, _FakeStreamInfo(srate=srate))
+        ch_ax = producer._state.msg_template.axes["ch"]
+        assert "_fingerprint" in ch_ax.__dict__
+        assert ch_ax.fingerprint is not None
+
+    def test_it_survives_the_transport(self):
+        import pickle
+
+        producer = LSLInletProducer(settings=LSLInletSettings())
+        _connect(producer)
+        landed = pickle.loads(pickle.dumps(producer._state.msg_template))
+        assert landed.chunk_dim == "time"
+        assert "_fingerprint" in landed.axes["ch"].__dict__
+
+    def test_a_reconnect_reprimes_for_the_new_channel_set(self):
+        producer = LSLInletProducer(settings=LSLInletSettings())
+        _connect(producer, _FakeStreamInfo(n_ch=2))
+        first = producer._state.msg_template.axes["ch"].fingerprint
+        _connect(producer, _FakeStreamInfo(n_ch=5))
+        second = producer._state.msg_template.axes["ch"]
+        assert "_fingerprint" in second.__dict__
+        assert second.fingerprint != first
+
+
 def test_setup_retries_when_the_description_cannot_be_fetched(caplog):
     """The desc is fetched over the wire, so a connect can open but not complete."""
 
