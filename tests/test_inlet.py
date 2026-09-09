@@ -393,7 +393,7 @@ def test_inlet_stamps_stream_identity_onto_every_message():
 class TestTheTemplateIsReadyForConsumers:
     """Two things only the source can supply, both set once per connection.
 
-    ``chunk_dim`` names the dimension messages append along -- the one whose
+    ``stream_dim`` names the dimension messages append along -- the one whose
     length is just however many samples arrived, and which a consumer must
     therefore leave out of the state it caches against the stream's
     configuration. ``fingerprint`` is the channel axis's content digest, cached
@@ -402,10 +402,10 @@ class TestTheTemplateIsReadyForConsumers:
     """
 
     @pytest.mark.parametrize("srate", [50.0, 0.0], ids=["regular", "irregular"])
-    def test_the_template_declares_its_chunk_dim(self, srate):
+    def test_the_template_declares_its_stream_dim(self, srate):
         producer = LSLInletProducer(settings=LSLInletSettings())
         _connect(producer, _FakeStreamInfo(srate=srate))
-        assert producer._state.msg_template.chunk_dim == "time"
+        assert producer._state.msg_template.stream_dim == "time"
 
     @pytest.mark.parametrize("srate", [50.0, 0.0], ids=["regular", "irregular"])
     def test_the_channel_axis_carries_its_fingerprint(self, srate):
@@ -421,7 +421,7 @@ class TestTheTemplateIsReadyForConsumers:
         producer = LSLInletProducer(settings=LSLInletSettings())
         _connect(producer)
         landed = pickle.loads(pickle.dumps(producer._state.msg_template))
-        assert landed.chunk_dim == "time"
+        assert landed.stream_dim == "time"
         assert "_fingerprint" in landed.axes["ch"].__dict__
 
     def test_a_reconnect_reprimes_for_the_new_channel_set(self):
