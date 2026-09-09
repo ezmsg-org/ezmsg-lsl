@@ -521,7 +521,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             # per-sample timestamps). Either way its extent is just however many
             # samples arrived, and consumers must leave it out of the state they
             # cache against the stream's configuration.
-            chunk_dim="time",
+            stream_dim="time",
             attrs={
                 "lsl_uid": uid,
                 "lsl_source_id": source_id,
