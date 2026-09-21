@@ -49,7 +49,9 @@ def test_inlet_pull_waits_for_one_then_drains(
 
         def pull_chunk(self, **kwargs):
             self.calls.append(kwargs)
-            return (None if "dest_obj" in kwargs else []), []
+            # With as_numpy, pylsl returns a (0, n_ch) view of dest_obj.
+            dest = kwargs.get("dest_obj")
+            return (dest[:0] if dest is not None else []), []
 
     producer = LSLInletProducer(settings=LSLInletSettings(max_pull_samples=cap))
     inlet = RecordingInlet()
@@ -70,9 +72,12 @@ def test_inlet_pull_waits_for_one_then_drains(
     else:
         assert call["max_samples"] == expected_max_samples
     if buffer_size is None:
+        # String streams: the list path so pylsl decodes the values.
         assert "dest_obj" not in call
+        assert "as_numpy" not in call
     else:
         assert call["dest_obj"] is producer._state.fetch_buffer
+        assert call["as_numpy"] is True
 
 
 def test_inlet_pull_snapshot_survives_shutdown_and_discards_stale_result(monkeypatch):

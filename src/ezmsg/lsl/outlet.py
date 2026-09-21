@@ -24,6 +24,18 @@ string2fmt = {
 }
 
 
+def canonical_channel_format(dtype: np.dtype) -> str:
+    """Key into :obj:`string2fmt` for a message's dtype.
+
+    All of numpy's string kinds -- fixed-width unicode/bytes and object -- map
+    to the single "string" LSL format. Normalising them collapses the width out
+    of the name, so a stream whose longest value grows keeps one ``source_id``.
+    """
+    if dtype.kind in "USO":
+        return "string"
+    return str(dtype)
+
+
 def generate_source_id(
     name: typing.Optional[str],
     stream_type: typing.Optional[str],
@@ -138,7 +150,7 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
             fs = 1 / message.axes["time"].gain
         out_shape = [_[0] for _ in zip(message.shape, message.dims) if _[1] != "time"]
         out_size = int(np.prod(out_shape))
-        channel_format = str(message.data.dtype)
+        channel_format = canonical_channel_format(message.data.dtype)
         source_id = generate_source_id(
             name=self.settings.stream_name,
             stream_type=self.settings.stream_type,
@@ -182,9 +194,13 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
         dat = dat.reshape(dat.shape[0], -1)
 
         if self._state.outlet.channel_format == pylsl.cf_string:
-            # pylsl requires string data to be passed sample-by-sample
-            for ix, row in enumerate(dat):
-                self._state.outlet.push_sample(list(row), timestamp=ts[ix] if isinstance(ts, np.ndarray) else ts)
+            # pylsl >= 1.18.5 pushes a whole string chunk in one call, but only
+            # from a flat sequence of values -- it can't unpack a 2-D array.
+            # Timestamps are listed per sample so an irregular-rate stream keeps
+            # the one-stamp-per-sample behaviour of the old push_sample loop.
+            n_samples = dat.shape[0]
+            ts_list = ts.tolist() if isinstance(ts, np.ndarray) else [ts] * n_samples
+            self._state.outlet.push_chunk(dat.ravel().tolist(), timestamp=ts_list)
         else:
             self._state.outlet.push_chunk(dat, timestamp=ts)
 

@@ -562,23 +562,26 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         cap = snapshot.max_pull_samples
         try:
             if fetch_buffer is not None:
+                # `as_numpy` returns a view of `fetch_buffer` trimmed to the
+                # samples received, and float64 timestamps, so neither needs
+                # rebuilding from Python lists. The view aliases the buffer the
+                # next pull overwrites, hence the copy below.
                 buf_samples = fetch_buffer.shape[0]
                 samples, timestamps = inlet.pull_chunk(
                     timeout=timeout,
                     max_samples=min(buf_samples, cap) if cap else buf_samples,
                     dest_obj=fetch_buffer,
                     min_samples=1,
+                    as_numpy=True,
                 )
-            elif cap:
-                samples, timestamps = inlet.pull_chunk(
-                    timeout=timeout,
-                    max_samples=cap,
-                    min_samples=1,
-                )
-                samples = np.array(samples)
             else:
-                samples, timestamps = inlet.pull_chunk(timeout=timeout, min_samples=1)
+                # String streams have no fetch buffer. Left as the list path so
+                # pylsl decodes the values; `as_numpy` would hand back raw,
+                # undecoded bytes.
+                kwargs = {"max_samples": cap} if cap else {}
+                samples, timestamps = inlet.pull_chunk(timeout=timeout, min_samples=1, **kwargs)
                 samples = np.array(samples)
+                timestamps = np.asarray(timestamps)
         except pylsl.util.LostError:
             # Terminal for this connection: liblsl only raises this once the
             # stream is gone for good (`recover=False`), and every later pull
@@ -614,7 +617,8 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         if not len(timestamps):
             return None
 
-        data = fetch_buffer[: len(timestamps)].copy() if samples is None else samples
+        # Detach from the reused fetch buffer; the list path already owns its data.
+        data = samples.copy() if fetch_buffer is not None else samples
 
         # `timestamps` is currently in the LSL clock stamped by the sender.
         if snapshot.use_arrival_time:

@@ -11,7 +11,8 @@ dependencies = [
     "ezmsg>=3.10.0b3",
     "ezmsg-baseproc>=1.7.0",
     "numpy>=1.26.4",
-    "pylsl>=1.18.4b1",
+    # 1.18.5 for pull_chunk(as_numpy=...) and single-call string push_chunk.
+    "pylsl>=1.18.5",
 ]
 dynamic = ["version"]
 
