@@ -81,3 +81,47 @@ def test_outlet_default_transport_flags():
 def test_outlet_sync_blocking_transport_flags():
     """sync_blocking=True sets the transp_sync_blocking transport flag."""
     assert _transport_flags_for(sync_blocking=True) == pylsl.transp_sync_blocking
+
+
+def test_outlet_string_chunk_roundtrip():
+    """A string message goes out in one push_chunk, one timestamp per sample."""
+    values = np.array([["a", "bb"], ["ccc", "d"], ["e", "ff"]], dtype="<U3")
+    offsets = np.array([10.0, 10.5, 11.25])
+    msg = AxisArray(
+        data=values,
+        dims=["time", "ch"],
+        axes={
+            "time": CoordinateAxis(data=offsets, dims=["time"], unit="s"),
+            "ch": CoordinateAxis(data=np.array(["x", "y"]), dims=["ch"]),
+        },
+        attrs={},
+        key="test_outlet_string_chunk_roundtrip",
+    )
+    proc = OutletProcessor(
+        settings=LSLOutletSettings(
+            stream_name="test_outlet_string_chunk_roundtrip",
+            stream_type="Markers",
+            assume_lsl_clock=True,
+        )
+    )
+    proc(msg)  # Creates the outlet and pushes; the inlet below joins late.
+
+    results = pylsl.resolve_byprop("name", "test_outlet_string_chunk_roundtrip", timeout=5.0)
+    assert results, "outlet did not resolve"
+    inlet = pylsl.StreamInlet(results[0], processing_flags=0)
+    inlet.open_stream(timeout=5.0)
+    try:
+        proc(msg)
+        samples, timestamps = [], []
+        for _ in range(20):
+            chunk, stamps = inlet.pull_chunk(timeout=0.2, max_samples=16, min_samples=1)
+            samples.extend(chunk)
+            timestamps.extend(stamps)
+            if len(timestamps) >= len(offsets):
+                break
+    finally:
+        inlet.close_stream()
+        proc.shutdown()
+
+    assert samples == [["a", "bb"], ["ccc", "d"], ["e", "ff"]]
+    assert np.allclose(timestamps, offsets)
