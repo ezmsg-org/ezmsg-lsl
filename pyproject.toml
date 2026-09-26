@@ -8,13 +8,17 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     # 3.10.0b3 for AxisArray.stream_dim and CoordinateAxis.fingerprint.
-    "ezmsg>=3.10.0b3",
+    "ezmsg>=3.10.0b4",
     "ezmsg-baseproc>=1.7.0",
     "numpy>=1.26.4",
     # 1.18.5 for pull_chunk(as_numpy=...) and single-call string push_chunk.
     "pylsl>=1.18.5",
 ]
 dynamic = ["version"]
+
+[project.entry-points."ezmsg.components"]
+"lsl.LSLInletUnit" = "ezmsg.lsl.inlet:LSLInletUnit"
+"lsl.LSLOutletUnit" = "ezmsg.lsl.outlet:LSLOutletUnit"
 
 [dependency-groups]
 dev = [
