@@ -353,6 +353,9 @@ class _FakeXML:
     def child(self, _name):
         return self
 
+    def first_child(self):
+        return self
+
     def empty(self):
         return True
 

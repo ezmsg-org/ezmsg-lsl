@@ -15,6 +15,51 @@ from ezmsg.util.messages.util import replace
 
 from .util import ClockSync
 
+# ``<desc>`` scalars parsed as numbers: the digitization ezmsg-sigproc's
+# ``Digitize`` records (``value = sample * conversion + offset``).
+_NUMERIC_DESC_ATTRS = frozenset({"conversion", "offset"})
+
+
+def _parse_stream_attrs(desc) -> dict[str, typing.Any]:
+    """Collect a stream ``<desc>``'s top-level text elements as message attrs.
+
+    The inverse of :func:`ezmsg.lsl.outlet.populate_desc_from_axisarray`, which
+    writes each ``message.attrs`` entry as ``<key>str(value)</key>``. Values stay
+    strings, except ``conversion`` and ``offset``, which are parsed as floats
+    (left as strings if they are not finite numbers). Nested blocks such as
+    ``<channels>`` are not attrs and are skipped; a repeated key keeps its first
+    value.
+    """
+    attrs: dict[str, typing.Any] = {}
+    elem = desc.first_child()
+    while not elem.empty():
+        text = elem.first_child()
+        if not text.empty() and text.is_text() and text.next_sibling().empty():
+            key, value = elem.name(), elem.child_value()
+            if key in _NUMERIC_DESC_ATTRS:
+                try:
+                    number = float(value)
+                except ValueError:
+                    number = None
+                if number is not None and np.isfinite(number):
+                    value = number
+            attrs.setdefault(key, value)
+        elem = elem.next_sibling()
+    return attrs
+
+
+def digitization(attrs: typing.Mapping[str, typing.Any]) -> typing.Optional[tuple[float, float]]:
+    """``(conversion, offset)`` from attrs recording a digitization, else ``None``.
+
+    A missing ``offset`` means 0. Both must be numbers, as
+    :func:`_parse_stream_attrs` and ezmsg-sigproc's ``Digitize`` leave them.
+    """
+    conversion = attrs.get("conversion")
+    offset = attrs.get("offset", 0.0)
+    if isinstance(conversion, (int, float)) and isinstance(offset, (int, float)):
+        return float(conversion), float(offset)
+    return None
+
 
 def _parse_channel_metadata(chans_elem, n_ch: int) -> typing.Optional[np.ndarray]:
     """Parse a ``<channels>`` XML element into a structured numpy array.
@@ -201,6 +246,20 @@ class LSLInletSettings(ez.Settings):
     releases the GIL, so the event loop stays free while the inlet waits.
     """
 
+    try_convert: bool = False
+    """
+    Whether to undo a digitization the stream's ``<desc>`` declares.
+
+    Top-level ``<desc>`` text elements always arrive in ``attrs`` (see
+    ``_parse_stream_attrs``); ``conversion`` and ``offset`` among them record how
+    to recover values from integer samples, ``value = sample * conversion +
+    offset`` (what ezmsg-sigproc's ``Digitize`` stamps and an ezmsg-lsl outlet
+    publishes). With this set, a stream that declares ``conversion`` is emitted
+    as float64 values and ``conversion`` / ``offset`` are dropped from ``attrs``,
+    so they are not applied twice; ``unit``, if declared, stays. A stream that
+    declares none is emitted unchanged.
+    """
+
     max_pull_samples: typing.Optional[int] = None
     """
     Total cap on samples returned per ``pull_chunk``. ``None`` (default) uses the
@@ -249,6 +308,8 @@ class LSLInletProducerState:
     clock_sync: typing.Optional[ClockSync] = None
     msg_template: typing.Optional[AxisArray] = None
     fetch_buffer: typing.Optional[npt.NDArray] = None
+    conversion: typing.Optional[tuple[float, float]] = None
+    """``(conversion, offset)`` applied to pulled samples (``try_convert``), or None."""
     hash: int = -1
 
     def __init__(self) -> None:
@@ -257,6 +318,7 @@ class LSLInletProducerState:
         self.clock_sync = None
         self.msg_template = None
         self.fetch_buffer = None
+        self.conversion = None
         self.hash = -1
 
 
@@ -272,6 +334,7 @@ class _PullSnapshot:
     use_arrival_time: bool
     use_lsl_clock: bool
     nominal_srate: float
+    conversion: typing.Optional[tuple[float, float]] = None
 
 
 class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[AxisArray], LSLInletProducerState]):
@@ -314,6 +377,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._state.inlet = None
         self._state.msg_template = None
         self._state.fetch_buffer = None
+        self._state.conversion = None
         self._warmed_up = False
         # Log-once flags: both conditions are polled every tick, so log on transition only.
         self._logged_searching = False
@@ -522,13 +586,24 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             # samples arrived, and consumers must leave it out of the state they
             # cache against the stream's configuration.
             stream_dim="time",
-            attrs={
-                "lsl_uid": uid,
-                "lsl_source_id": source_id,
-                "lsl_hostname": hostname,
-            },
+            attrs=self._stream_attrs(inlet_info, fmt, uid=uid, source_id=source_id, hostname=hostname),
         )
         return True
+
+    def _stream_attrs(self, inlet_info: pylsl.StreamInfo, fmt: int, **identity: str) -> dict[str, typing.Any]:
+        """The message attrs for a newly opened stream; also sets ``state.conversion``.
+
+        ``<desc>`` scalars first, then the connection's ``lsl_*`` identity, which
+        a ``<desc>`` element of the same name cannot override.
+        """
+        attrs = _parse_stream_attrs(inlet_info.desc())
+        conversion = digitization(attrs) if self.settings.try_convert and fmt != pylsl.cf_string else None
+        self._state.conversion = conversion
+        if conversion is not None:
+            attrs.pop("conversion", None)
+            attrs.pop("offset", None)
+        attrs.update({f"lsl_{key}": value for key, value in identity.items()})
+        return attrs
 
     def _snapshot_pull_state(self) -> typing.Optional[_PullSnapshot]:
         """Capture strong references needed by a pull before entering a worker."""
@@ -546,6 +621,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             use_arrival_time=settings.use_arrival_time,
             use_lsl_clock=settings.use_lsl_clock,
             nominal_srate=settings.info.nominal_srate,
+            conversion=state.conversion,
         )
 
     def _pull(self, snapshot: _PullSnapshot, timeout: float = 0.0) -> typing.Optional[AxisArray]:
@@ -618,7 +694,13 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             return None
 
         # Detach from the reused fetch buffer; the list path already owns its data.
-        data = samples.copy() if fetch_buffer is not None else samples
+        if snapshot.conversion is not None:
+            # try_convert: the arithmetic allocates a new float64 array, which
+            # detaches from the fetch buffer too.
+            conversion, offset = snapshot.conversion
+            data = np.asarray(samples, dtype=np.float64) * conversion + offset
+        else:
+            data = samples.copy() if fetch_buffer is not None else samples
 
         # `timestamps` is currently in the LSL clock stamped by the sender.
         if snapshot.use_arrival_time:
@@ -718,6 +800,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._state.inlet = None
         self._state.msg_template = None
         self._state.fetch_buffer = None
+        self._state.conversion = None
         # ClockSync is a singleton shared across all LSL units in the process.
         # Don't stop() it — just drop our reference.
         self._state.clock_sync = None
