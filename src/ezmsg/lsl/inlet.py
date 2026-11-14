@@ -2,6 +2,7 @@ import asyncio
 import time
 import typing
 import warnings
+from collections import deque
 from dataclasses import dataclass, field, fields
 
 import ezmsg.core as ez
@@ -13,6 +14,7 @@ from ezmsg.baseproc import BaseProducerUnit, BaseStatefulProducer, processor_sta
 from ezmsg.util.messages.axisarray import AxisArray
 from ezmsg.util.messages.util import replace
 
+from .timing import StreamTiming
 from .util import ClockSync
 
 # ``<desc>`` scalars parsed as numbers: the digitization ezmsg-sigproc's
@@ -230,8 +232,36 @@ class LSLInletSettings(ez.Settings):
 
     processing_flags: int = pylsl.proc_ALL
     """
-    The processing flags option passed to pylsl.StreamInlet. Default is proc_ALL which includes all flags.
+    Which of liblsl's timestamp post-processing steps to apply. Default is proc_ALL which includes all flags.
     Many users will want to set this to pylsl.proc_clocksync to disable dejittering.
+
+    For a regularly sampled stream, ``proc_dejitter`` is carried out here and not by liblsl
+    (and ``proc_monotonize``, which only makes sense with it, is dropped): liblsl's smoothing
+    runs straight through a break in the stream, hiding it and mis-timing the samples that
+    follow. See ``jitter_break_threshold_seconds``.
+    """
+
+    jitter_break_threshold_seconds: float = 1.0
+    """
+    An interruption in a regularly sampled stream longer than both this and
+    ``jitter_break_threshold_samples`` sample periods is a break: the pulled chunk is cut
+    there, the first message after it starts a new
+    :attr:`~ezmsg.util.messages.axisarray.AxisArray.segment` (on which stateful processors
+    downstream reset), and jitter removal restarts. These are pyxdf's thresholds and
+    defaults, so a live stream and its recording break in the same places.
+
+    A reconnect starts a new segment only if it lands on a different stream (another
+    ``source_id``, or a changed shape, format or rate) or the timestamps show a break by
+    this rule. Set both thresholds to 0 to never break on timestamps.
+    """
+
+    jitter_break_threshold_samples: float = 500
+    """See ``jitter_break_threshold_seconds``."""
+
+    dejitter_halftime: float = 90.0
+    """
+    How quickly jitter removal forgets: a sample this many seconds old counts half as much
+    as the newest when the stream's timing is fitted. liblsl's own default.
     """
 
     pull_timeout: float = 0.1
@@ -298,7 +328,20 @@ class LSLInletSettings(ez.Settings):
     writers name containers by it and pipelines route on it, so a reconnect would
     fork the recording. A dropped socket that re-attaches to the *same* outlet
     instance never bumps the suffix, so a brief blip preserves state either way.
+
+    .. deprecated::
+        Messages now carry a ``segment`` that changes when the stream does not continue,
+        which resets downstream state without renaming the stream.
     """
+
+    def __post_init__(self) -> None:
+        if self.distinct_key_per_connection:
+            warnings.warn(
+                "distinct_key_per_connection is deprecated: a reconnect that breaks the stream now starts "
+                "a new AxisArray.segment, which resets downstream state without changing the key.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
 
 
 @processor_state
@@ -335,6 +378,7 @@ class _PullSnapshot:
     use_lsl_clock: bool
     nominal_srate: float
     conversion: typing.Optional[tuple[float, float]] = None
+    timing: typing.Optional[StreamTiming] = None
 
 
 class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[AxisArray], LSLInletProducerState]):
@@ -353,7 +397,20 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._last_signature: typing.Optional[tuple] = None
         self._reconnect_source_id: typing.Optional[str] = None
         self._reconnect_deadline = 0.0
+        # The output `segment`, and the timing of the stream it counts breaks in. Both
+        # outlive a reconnect: landing on the same stream with no break continues it.
+        self._segment = 0
+        self._timing: typing.Optional[StreamTiming] = None
+        # Messages cut from one pull and not yet produced.
+        self._pending: deque[AxisArray] = deque()
         super().__init__(*args, settings=settings, **kwargs)
+
+    def _inlet_flags(self, nominal_srate: float) -> int:
+        """liblsl post-processing for the inlet: without its smoothing where ours replaces it."""
+        flags = self.settings.processing_flags
+        if nominal_srate > 0:
+            flags &= ~(pylsl.proc_dejitter | pylsl.proc_monotonize)
+        return flags
 
     def update_settings(self, new_settings: LSLInletSettings) -> None:
         # New settings may retarget the inlet entirely, so holding out for the
@@ -378,6 +435,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._state.msg_template = None
         self._state.fetch_buffer = None
         self._state.conversion = None
+        self._pending.clear()
         self._warmed_up = False
         # Log-once flags: both conditions are polled every tick, so log on transition only.
         self._logged_searching = False
@@ -414,7 +472,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
                 strm_info,
                 max_chunklen=1,
                 recover=_RECOVER,
-                processing_flags=self.settings.processing_flags,
+                processing_flags=self._inlet_flags(info.nominal_srate),
             )
             try:
                 inlet.open_stream(timeout=2.0)
@@ -467,7 +525,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             strm_info,
             max_chunklen=1,
             recover=_RECOVER,
-            processing_flags=self.settings.processing_flags,
+            processing_flags=self._inlet_flags(strm_info.nominal_srate()),
         )
         self._state.inlet.open_stream(timeout=5.0)
         if not self._setup_after_open():
@@ -510,6 +568,27 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         hostname = inlet_info.hostname()
         if self._last_uid is not None and uid != self._last_uid:
             self._connection_epoch += 1
+        # Does this connection continue the stream the last one was reading? Only if it is
+        # demonstrably the same stream; whether data was missed in between is then for the
+        # timestamps to say (see `StreamTiming`). A stream without a source_id cannot be
+        # told from another of the same name.
+        srate = inlet_info.nominal_srate()
+        signature = (n_ch, fmt, srate, hostname)
+        first_connection = self._last_signature is None
+        continues = bool(source_id) and source_id == self._last_source_id and signature == self._last_signature
+        if not first_connection and not continues:
+            self._segment += 1
+        if srate <= 0:
+            # Irregular: per-sample timestamps go out as they are, and no gap is a break.
+            self._timing = None
+        elif self._timing is None or not continues:
+            self._timing = StreamTiming(
+                srate,
+                break_seconds=self.settings.jitter_break_threshold_seconds,
+                break_samples=self.settings.jitter_break_threshold_samples,
+                dejitter=bool(self.settings.processing_flags & pylsl.proc_dejitter),
+                halftime=self.settings.dejitter_halftime,
+            )
         self._last_uid = uid
         self._last_source_id = source_id
         self._clear_reconnect_preference()
@@ -528,7 +607,6 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         # A reconnect that lands on a different shape or a different machine is
         # still a valid match on the configured criteria, so nothing else will
         # complain -- but it silently changes what the data means.
-        signature = (n_ch, fmt, inlet_info.nominal_srate(), hostname)
         if self._last_signature is not None and signature != self._last_signature:
             changes = [
                 f"{label}: {old!r} -> {new!r}"
@@ -622,6 +700,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             use_lsl_clock=settings.use_lsl_clock,
             nominal_srate=settings.info.nominal_srate,
             conversion=state.conversion,
+            timing=self._timing,
         )
 
     def _pull(self, snapshot: _PullSnapshot, timeout: float = 0.0) -> typing.Optional[AxisArray]:
@@ -702,35 +781,49 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         else:
             data = samples.copy() if fetch_buffer is not None else samples
 
-        # `timestamps` is currently in the LSL clock stamped by the sender.
+        # This runs on a worker thread, so a reset may have replaced the inlet meanwhile. Its
+        # samples must not advance the timing of the stream that replaced it.
+        if self._state.inlet is not inlet:
+            return None
+
+        # `timestamps` is in the LSL clock, as stamped by the sender. For a regular stream,
+        # cut the chunk at any break and time each run by its (dejittered) first sample.
+        timing = snapshot.timing if snapshot.nominal_srate > 0.0 else None
+        last_raw = float(timestamps[-1])
+        if timing is not None:
+            runs = timing.split(timestamps)
+            times = np.array([t for _, _, t, _ in runs])
+        else:
+            runs = [(0, len(timestamps), 0.0, False)]
+            times = np.array(timestamps, dtype=float)
+
         if snapshot.use_arrival_time:
-            # Drop the sender stamps; use "now". Useful when playing back old XDF files.
-            timestamps = time.monotonic() - (timestamps - timestamps[0])
+            # Drop the sender stamps: the newest sample arrived "now" and the rest keep their
+            # spacing before it. Useful when playing back old XDF files.
+            times = time.monotonic() - (last_raw - times)
             if snapshot.use_lsl_clock:
-                timestamps = snapshot.clock_sync.system2lsl(timestamps)
+                times = snapshot.clock_sync.system2lsl(times)
         elif not snapshot.use_lsl_clock:
             # Keep the sender clock but convert to system time.
-            timestamps = snapshot.clock_sync.lsl2system(timestamps)
+            times = snapshot.clock_sync.lsl2system(times)
 
-        if snapshot.nominal_srate <= 0.0:
+        template = snapshot.msg_template
+        if timing is None:
             # Irregular rate stream uses CoordinateAxis for time so each sample has a timestamp.
-            out_time_ax = replace(
-                snapshot.msg_template.axes["time"],
-                data=np.array(timestamps),
-            )
-        else:
-            # Regular rate uses a LinearAxis for time so we only need the time of the first sample.
-            out_time_ax = replace(snapshot.msg_template.axes["time"], offset=timestamps[0])
+            time_ax = replace(template.axes["time"], data=times)
+            return replace(template, data=data, axes={**template.axes, "time": time_ax}, segment=self._segment)
 
-        out_msg = replace(
-            snapshot.msg_template,
-            data=data,
-            axes={
-                **snapshot.msg_template.axes,
-                "time": out_time_ax,
-            },
-        )
-        return out_msg
+        # Regular rate uses a LinearAxis for time so we only need the time of each run's first sample.
+        messages = []
+        for (start, stop, _, is_break), t0 in zip(runs, times):
+            if is_break:
+                self._segment += 1
+            time_ax = replace(template.axes["time"], offset=float(t0))
+            messages.append(
+                replace(template, data=data[start:stop], axes={**template.axes, "time": time_ax}, segment=self._segment)
+            )
+        self._pending.extend(messages[1:])
+        return messages[0]
 
     async def _apull(self, timeout: float = 0.0) -> typing.Optional[AxisArray]:
         """Pull on a worker and discard data from an inlet replaced meanwhile."""
@@ -744,10 +837,14 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         # old inlet and its buffers alive until the worker has safely returned,
         # but data from that old connection must not be published.
         if self._state.inlet is not snapshot.inlet:
+            self._pending.clear()
             return None
         return result
 
     async def _produce(self) -> typing.Optional[AxisArray]:
+        if self._pending:
+            # The rest of a pull that was cut at a break.
+            return self._pending.popleft()
         if self._lost:
             # `_reset_state` already drops the inlet, its buffers and template,
             # and rebuilds the ContinuousResolver that `_setup_after_open`
