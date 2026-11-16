@@ -1,7 +1,8 @@
 """When the inlet starts a new ``AxisArray.segment``.
 
-On a break in the stream's timestamps, and on a reconnect that lands on a different stream. A
-reconnect to the same stream with nothing missed continues the segment.
+Only on a break measured in the stream's timestamps, including across a reconnect. A
+reconnect with nothing missed continues the segment, even onto a different stream: that
+changes ``config_id`` instead.
 """
 
 import time
@@ -75,7 +76,8 @@ def test_a_break_inside_a_pull_cuts_it_and_starts_a_segment():
     first, second = _pull(producer, stamps)
 
     assert [m.data.shape[0] for m in (first, second)] == [30, 20]
-    assert [before.segment, first.segment, second.segment] == [0, 0, 1]
+    s0 = before.segment
+    assert [first.segment, second.segment] == [s0, s0 + 1]
     assert second.axes["time"].offset == pytest.approx(103.0, abs=1e-6)
     np.testing.assert_array_equal(second.data[:, 0], np.arange(30, 50))
 
@@ -91,24 +93,24 @@ def test_the_rest_of_a_cut_pull_is_produced_next():
         return await producer._produce(), await producer._produce()
 
     first, second = asyncio.run(two())
-    assert (first.segment, second.segment) == (0, 1)
+    assert second.segment == first.segment + 1
     assert second.data.shape[0] == 20
 
 
 def test_reconnecting_to_the_same_stream_with_nothing_missed_continues_the_segment():
     producer = _producer()
-    _pull(producer, _stamps(100.0, 50))
+    (before,) = _pull(producer, _stamps(100.0, 50))
     _reconnect(producer, _FakeStreamInfo(srate=SRATE, uid="uid-2"))  # a restarted outlet, same source_id
     (msg,) = _pull(producer, _stamps(100.05, 50))
-    assert msg.segment == 0
+    assert msg.segment == before.segment
 
 
 def test_reconnecting_to_the_same_stream_after_a_break_starts_a_segment():
     producer = _producer()
-    _pull(producer, _stamps(100.0, 50))
+    (before,) = _pull(producer, _stamps(100.0, 50))
     _reconnect(producer)
     (msg,) = _pull(producer, _stamps(130.0, 50))
-    assert msg.segment == 1
+    assert msg.segment == before.segment + 1
 
 
 @pytest.mark.parametrize(
@@ -120,32 +122,52 @@ def test_reconnecting_to_the_same_stream_after_a_break_starts_a_segment():
     ],
     ids=["source_id", "channel_count", "nominal_srate"],
 )
-def test_reconnecting_to_a_different_stream_starts_a_segment(changed):
+def test_reconnecting_to_a_different_stream_changes_config_id_not_segment(changed):
     producer = _producer()
-    _pull(producer, _stamps(100.0, 50))
+    (before,) = _pull(producer, _stamps(100.0, 50))
     _reconnect(producer, changed)
-    (msg,) = _pull(producer, _stamps(100.05, 50))  # the timestamps alone would say it continues
-    assert msg.segment == 1
+    (msg,) = _pull(producer, _stamps(100.05, 50))  # the timestamps say it continues
+    assert msg.segment == before.segment
+    assert msg.config_id != before.config_id
 
 
-def test_a_stream_without_a_source_id_is_never_assumed_to_be_the_same_one():
+@pytest.mark.parametrize(
+    "changed",
+    [_FakeStreamInfo(srate=SRATE, source_id="src-2"), _FakeStreamInfo(srate=SRATE / 2)],
+    ids=["source_id", "nominal_srate"],
+)
+def test_a_gap_across_a_reconnect_to_a_different_stream_starts_a_segment(changed):
+    producer = _producer()
+    (before,) = _pull(producer, _stamps(100.0, 50))
+    _reconnect(producer, changed)
+    (msg,) = _pull(producer, _stamps(130.0, 50))
+    assert msg.segment == before.segment + 1
+
+
+def test_a_stream_without_a_source_id_continues_only_by_its_timestamps():
     anonymous = _FakeStreamInfo(srate=SRATE, source_id="")
     producer = _producer(anonymous)
-    _pull(producer, _stamps(100.0, 50))
+    (before,) = _pull(producer, _stamps(100.0, 50))
     _reconnect(producer, anonymous)
     (msg,) = _pull(producer, _stamps(100.05, 50))
-    assert msg.segment == 1
+    assert msg.segment == before.segment
+    _reconnect(producer, anonymous)
+    (later,) = _pull(producer, _stamps(130.0, 50))
+    assert later.segment == before.segment + 1
 
 
-def test_an_irregular_stream_keeps_its_timestamps_and_only_breaks_on_a_new_stream():
+def test_an_irregular_stream_keeps_its_timestamps_and_never_breaks():
     irregular = _FakeStreamInfo(srate=0.0)
     producer = _producer(irregular)
     stamps = np.array([100.0, 100.4, 160.0])
     (msg,) = _pull(producer, stamps)
     np.testing.assert_array_equal(msg.axes["time"].data, stamps)
-    assert msg.segment == 0
+    (same,) = _pull(producer, stamps + 100)  # a minute's silence is no break in an irregular stream
+    assert same.segment == msg.segment
     _reconnect(producer, _FakeStreamInfo(srate=0.0, source_id="src-2"))
-    assert _pull(producer, stamps + 1)[0].segment == 1
+    (other,) = _pull(producer, stamps + 200)
+    assert other.segment == msg.segment
+    assert other.config_id != msg.config_id
 
 
 def test_liblsl_is_not_asked_to_smooth_a_regular_stream():
@@ -205,9 +227,12 @@ def test_a_paused_outlet_starts_a_segment():
     push(1.0, msgs)
     producer.shutdown()
 
+    s0 = msgs[0].segment
     segments = [m.segment for m in msgs]
-    assert segments == sorted(segments) and set(segments) == {0, 1}
-    first_after = next(m for m in msgs if m.segment == 1)
-    last_before = [m for m in msgs if m.segment == 0][-1]
+    assert segments == sorted(segments) and set(segments) == {s0, s0 + 1}
+    first_after = next(m for m in msgs if m.segment == s0 + 1)
+    last_before = [m for m in msgs if m.segment == s0][-1]
     gap = first_after.axes["time"].offset - (last_before.axes["time"].offset + last_before.data.shape[0] / SRATE)
     assert gap == pytest.approx(1.5, abs=0.2)
+    # The break is in time, not configuration.
+    assert len({m.config_id for m in msgs}) == 1

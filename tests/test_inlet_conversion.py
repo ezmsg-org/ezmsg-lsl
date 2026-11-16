@@ -13,6 +13,7 @@ import numpy as np
 import pylsl
 import pytest
 from ezmsg.util.messages.axisarray import AxisArray, CoordinateAxis
+from test_config_id import expected_config_id
 
 from ezmsg.lsl.inlet import LSLInfo, LSLInletProducer, LSLInletSettings, _parse_stream_attrs, digitization
 from ezmsg.lsl.outlet import populate_desc_from_axisarray
@@ -84,6 +85,7 @@ def test_try_convert_undoes_the_declared_digitization(try_convert: bool):
         del outlet
 
     assert msg.attrs["unit"] == "uV"
+    assert msg.config_id == expected_config_id(msg) != 0  # declared for the emitted dtype
     if try_convert:
         assert msg.data.dtype == np.float64
         np.testing.assert_array_equal(msg.data, 6.0)
