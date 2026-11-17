@@ -11,7 +11,7 @@ import numpy.typing as npt
 import pylsl
 import pylsl.util
 from ezmsg.baseproc import BaseProducerUnit, BaseStatefulProducer, processor_state
-from ezmsg.util.messages.axisarray import AxisArray
+from ezmsg.util.messages.axisarray import AxisArray, chain_config_id, compute_config_id
 from ezmsg.util.messages.util import replace
 
 from .timing import StreamTiming
@@ -250,9 +250,11 @@ class LSLInletSettings(ez.Settings):
     downstream reset), and jitter removal restarts. These are pyxdf's thresholds and
     defaults, so a live stream and its recording break in the same places.
 
-    A reconnect starts a new segment only if it lands on a different stream (another
-    ``source_id``, or a changed shape, format or rate) or the timestamps show a break by
-    this rule. Set both thresholds to 0 to never break on timestamps.
+    A reconnect starts a new segment only if the timestamps show a break by this rule,
+    measured across the reconnect: a reconnect may have missed nothing. Landing on a
+    different stream (another ``source_id`` or host, or a changed shape, format or rate)
+    changes the messages' ``config_id`` instead. Set both thresholds to 0 to never break
+    on timestamps.
     """
 
     jitter_break_threshold_samples: float = 500
@@ -330,8 +332,9 @@ class LSLInletSettings(ez.Settings):
     instance never bumps the suffix, so a brief blip preserves state either way.
 
     .. deprecated::
-        Messages now carry a ``segment`` that changes when the stream does not continue,
-        which resets downstream state without renaming the stream.
+        Messages now carry a ``segment`` that changes when the stream does not continue in
+        time, and a ``config_id`` that changes when the inlet lands on a different stream;
+        either resets downstream state without renaming the stream.
     """
 
     def __post_init__(self) -> None:
@@ -398,7 +401,7 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         self._reconnect_source_id: typing.Optional[str] = None
         self._reconnect_deadline = 0.0
         # The output `segment`, and the timing of the stream it counts breaks in. Both
-        # outlive a reconnect: landing on the same stream with no break continues it.
+        # outlive a reconnect: only a break measured in the timestamps starts a segment.
         self._segment = 0
         self._timing: typing.Optional[StreamTiming] = None
         # Messages cut from one pull and not yet produced.
@@ -569,19 +572,18 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         if self._last_uid is not None and uid != self._last_uid:
             self._connection_epoch += 1
         # Does this connection continue the stream the last one was reading? Only if it is
-        # demonstrably the same stream; whether data was missed in between is then for the
-        # timestamps to say (see `StreamTiming`). A stream without a source_id cannot be
-        # told from another of the same name.
+        # demonstrably the same stream; then its timing fit carries on. A stream without a
+        # source_id cannot be told from another of the same name. Either way, whether data
+        # was missed in between is for the timestamps to say (see `StreamTiming`); a
+        # different stream shows in `config_id`, not `segment`.
         srate = inlet_info.nominal_srate()
         signature = (n_ch, fmt, srate, hostname)
-        first_connection = self._last_signature is None
         continues = bool(source_id) and source_id == self._last_source_id and signature == self._last_signature
-        if not first_connection and not continues:
-            self._segment += 1
         if srate <= 0:
             # Irregular: per-sample timestamps go out as they are, and no gap is a break.
             self._timing = None
         elif self._timing is None or not continues:
+            last = self._timing.last if self._timing is not None else None
             self._timing = StreamTiming(
                 srate,
                 break_seconds=self.settings.jitter_break_threshold_seconds,
@@ -589,6 +591,8 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
                 dejitter=bool(self.settings.processing_flags & pylsl.proc_dejitter),
                 halftime=self.settings.dejitter_halftime,
             )
+            # A fresh fit, but a gap across the reconnect is still measured.
+            self._timing.last = last
         self._last_uid = uid
         self._last_source_id = source_id
         self._clear_reconnect_preference()
@@ -653,8 +657,11 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
         key = inlet_info.name()
         if self.settings.distinct_key_per_connection and self._connection_epoch:
             key = f"{key}#{self._connection_epoch}"
-        self._state.msg_template = AxisArray(
-            data=np.empty((0, n_ch)),
+        attrs = self._stream_attrs(inlet_info, fmt, uid=uid, source_id=source_id, hostname=hostname)
+        # The dtype `_pull` emits, which config_id covers: float64 once converted.
+        dtype = np.float64 if self._state.conversion is not None else fmt2npdtype.get(fmt, str)
+        template = AxisArray(
+            data=np.empty((0, n_ch), dtype=dtype),
             dims=["time", "ch"],
             axes={"time": time_ax, "ch": ch_ax},
             key=key,
@@ -664,8 +671,13 @@ class LSLInletProducer(BaseStatefulProducer[LSLInletSettings, typing.Optional[Ax
             # samples arrived, and consumers must leave it out of the state they
             # cache against the stream's configuration.
             stream_dim="time",
-            attrs=self._stream_attrs(inlet_info, fmt, uid=uid, source_id=source_id, hostname=hostname),
+            attrs=attrs,
         )
+        # Digested once per connection; every message reuses it through `replace`. The
+        # stream's identity is folded in, so landing on another stream of the same layout
+        # changes config_id.
+        config_id = chain_config_id(compute_config_id(template), source_id, hostname)
+        self._state.msg_template = replace(template, config_id=config_id)
         return True
 
     def _stream_attrs(self, inlet_info: pylsl.StreamInfo, fmt: int, **identity: str) -> dict[str, typing.Any]:
