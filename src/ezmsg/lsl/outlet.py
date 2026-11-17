@@ -5,7 +5,7 @@ import typing
 import ezmsg.core as ez
 import numpy as np
 import pylsl
-from ezmsg.baseproc import BaseConsumerUnit, BaseStatefulConsumer, processor_state
+from ezmsg.baseproc import BaseConsumerUnit, BaseStatefulConsumer, processor_state, resolve_stream_dim
 from ezmsg.util.messages.axisarray import AxisArray
 
 from .util import ClockSync
@@ -101,7 +101,7 @@ class LSLOutletSettings(ez.Settings):
     """
     Whether to push the data with the incoming timestamps (True, default) or to ignore the incoming timestamps
     and push the data with the current pylsl.local_clock (False). When `True`, the incoming data
-    must have a "time" dimension.
+    must have an axis for its stream dimension (`stream_dim`, else "time", else the first dimension).
     """
 
     assume_lsl_clock: bool = False
@@ -132,23 +132,23 @@ class LSLOutletProcessorState:
 
 class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutletProcessorState]):
     def _hash_message(self, message: AxisArray) -> int:
+        dim = resolve_stream_dim(message, self.STREAMING_DIMS)
         fs = pylsl.IRREGULAR_RATE
-        sample_shape = message.data.shape
-        if "time" in message.axes:
-            if hasattr(message.axes["time"], "gain"):
-                fs = 1 / message.axes["time"].gain
-            time_ix = message.get_axis_idx("time")
-            sample_shape = message.data.shape[:time_ix] + message.data.shape[time_ix + 1 :]
+        if hasattr(message.axes.get(dim), "gain"):
+            fs = 1 / message.axes[dim].gain
+        time_ix = message.get_axis_idx(dim)
+        sample_shape = message.data.shape[:time_ix] + message.data.shape[time_ix + 1 :]
         return hash((message.key, message.data.dtype, fs, sample_shape))
 
     def _reset_state(self, message: AxisArray) -> None:
         self.shutdown()
         self._state.clock_sync = ClockSync()
 
+        dim = resolve_stream_dim(message, self.STREAMING_DIMS)
         fs = pylsl.IRREGULAR_RATE
-        if "time" in message.axes and hasattr(message.axes["time"], "gain"):
-            fs = 1 / message.axes["time"].gain
-        out_shape = [_[0] for _ in zip(message.shape, message.dims) if _[1] != "time"]
+        if hasattr(message.axes.get(dim), "gain"):
+            fs = 1 / message.axes[dim].gain
+        out_shape = [_[0] for _ in zip(message.shape, message.dims) if _[1] != dim]
         out_size = int(np.prod(out_shape))
         channel_format = canonical_channel_format(message.data.dtype)
         source_id = generate_source_id(
@@ -171,9 +171,10 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
         self._state.outlet = pylsl.StreamOutlet(info, transport_flags=transport_flags)
 
     def _process(self, message: AxisArray) -> None:
+        dim = resolve_stream_dim(message, self.STREAMING_DIMS)
         dat = message.data
-        if message.dims[0] != "time":
-            dat = np.moveaxis(dat, message.dims.index("time"), 0)
+        if message.dims[0] != dim:
+            dat = np.moveaxis(dat, message.dims.index(dim), 0)
 
         if not dat.flags.c_contiguous:
             dat = np.ascontiguousarray(dat)
@@ -183,10 +184,10 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
             dat = np.ascontiguousarray(dat).copy()
 
         if self.settings.use_message_timestamp:
-            if hasattr(message.axes["time"], "data"):
-                ts = message.axes["time"].data
+            if hasattr(message.axes[dim], "data"):
+                ts = message.axes[dim].data
             else:
-                ts = message.axes["time"].value(dat.shape[0])
+                ts = message.axes[dim].value(dat.shape[0])
             if not self.settings.assume_lsl_clock:
                 ts = self._state.clock_sync.system2lsl(ts)
         else:
