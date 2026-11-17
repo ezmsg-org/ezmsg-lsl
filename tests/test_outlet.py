@@ -3,6 +3,7 @@ These unit tests aren't really testable in a runner without a complicated setup 
 This code exists mostly to use during development and debugging.
 """
 
+import re
 import tempfile
 import typing
 from pathlib import Path
@@ -11,6 +12,7 @@ from unittest import mock
 import ezmsg.core as ez
 import numpy as np
 import pylsl
+import pytest
 from ezmsg.baseproc.clock import Clock
 from ezmsg.util.messagecodec import message_log
 from ezmsg.util.messagelogger import MessageLogger
@@ -125,3 +127,93 @@ def test_outlet_string_chunk_roundtrip():
 
     assert samples == [["a", "bb"], ["ccc", "d"], ["e", "ff"]]
     assert np.allclose(timestamps, offsets)
+
+
+def _stream_msg(n: int, dims=("win", "ch"), stream_dim: typing.Optional[str] = "win") -> AxisArray:
+    """``n`` samples of 3 channels streaming along ``win`` (not "time")."""
+    shape = tuple(n if d == "win" else 3 for d in dims)
+    return AxisArray(
+        data=np.arange(np.prod(shape), dtype=np.float32).reshape(shape),
+        dims=list(dims),
+        axes={
+            "win": AxisArray.LinearAxis(gain=0.5, offset=0.0, unit="s"),
+            "ch": CoordinateAxis(data=np.array(["a", "b", "c"]), dims=["ch"]),
+        },
+        key="test",
+        stream_dim=stream_dim,
+    )
+
+
+def _run_outlet(messages: typing.Iterable[AxisArray]):
+    """Feed ``messages`` through an OutletProcessor with a mocked StreamOutlet; return the mock class."""
+    proc = OutletProcessor(settings=LSLOutletSettings(stream_name="test", stream_type="EEG", assume_lsl_clock=True))
+    with mock.patch("ezmsg.lsl.outlet.pylsl.StreamOutlet") as MockOutlet:
+        for msg in messages:
+            proc(msg)
+    return MockOutlet
+
+
+@pytest.mark.parametrize(
+    "dims, stream_dim",
+    [(("win", "ch"), "win"), (("ch", "win"), "win"), (("win", "ch"), None)],  # None falls back to dims[0]
+)
+def test_outlet_non_time_stream_dim(dims, stream_dim):
+    """The outlet streams along the declared stream_dim (or dims[0]), so chunk size does not recreate it."""
+    msgs = [_stream_msg(n, dims, stream_dim) for n in (4, 7, 2)]
+    MockOutlet = _run_outlet(msgs)
+
+    assert MockOutlet.call_count == 1
+    info = MockOutlet.call_args.args[0]
+    assert info.channel_count() == 3
+    assert info.nominal_srate() == 2.0
+    pushes = MockOutlet.return_value.push_chunk.call_args_list
+    for msg, push in zip(msgs, pushes):
+        expected = np.moveaxis(msg.data, dims.index("win"), 0)
+        np.testing.assert_array_equal(push.args[0], expected)
+        np.testing.assert_allclose(push.kwargs["timestamp"], msg.axes["win"].value(expected.shape[0]))
+
+
+def _ch_msg(labels=("a", "b", "c"), n: int = 5, dtype=np.float32, fs: float = 100.0, **kwargs) -> AxisArray:
+    return AxisArray(
+        data=np.zeros((n, len(labels)), dtype=dtype),
+        dims=["time", "ch"],
+        axes={
+            "time": AxisArray.TimeAxis(fs=fs, offset=0.0),
+            "ch": CoordinateAxis(data=np.array(labels), dims=["ch"]),
+        },
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        _ch_msg(labels=("x", "y", "z")),
+        _ch_msg(attrs={"unit": "uV"}),
+        _ch_msg(dtype=np.int16),
+        _ch_msg(labels=("a", "b", "c", "d")),
+        _ch_msg(fs=200.0),
+    ],
+    ids=["relabel", "attrs", "dtype", "n_ch", "fs"],
+)
+def test_outlet_recreated_when_advertised_info_changes(second):
+    MockOutlet = _run_outlet([_ch_msg(), second])
+    assert MockOutlet.call_count == 2
+    info = MockOutlet.call_args.args[0]
+    assert re.findall(r"<label>(.*?)</label>", info.as_xml()) == list(second.axes["ch"].data)
+    assert info.nominal_srate() == second.axes["time"].gain ** -1
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [_ch_msg(n=5), _ch_msg(n=2), _ch_msg(n=9)],
+        [_ch_msg(segment=0), _ch_msg(segment=1)],
+        [_ch_msg(config_id=1), _ch_msg(config_id=2), _ch_msg(config_id=3, n=2)],
+        [_ch_msg(key="a"), _ch_msg(key="b")],
+        [_ch_msg(dtype="<U1"), _ch_msg(dtype="<U4")],
+    ],
+    ids=["chunk_size", "segment", "config_id", "key", "string_width"],
+)
+def test_outlet_kept_when_advertised_info_unchanged(messages):
+    assert _run_outlet(messages).call_count == 1
