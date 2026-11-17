@@ -7,6 +7,7 @@ import numpy as np
 import pylsl
 from ezmsg.baseproc import BaseConsumerUnit, BaseStatefulConsumer, processor_state, resolve_stream_dim
 from ezmsg.util.messages.axisarray import AxisArray
+from ezmsg.util.messages.util import replace
 
 from .util import ClockSync
 
@@ -132,13 +133,25 @@ class LSLOutletProcessorState:
 
 class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutletProcessorState]):
     def _hash_message(self, message: AxisArray) -> int:
-        dim = resolve_stream_dim(message, self.STREAMING_DIMS)
-        fs = pylsl.IRREGULAR_RATE
-        if hasattr(message.axes.get(dim), "gain"):
-            fs = 1 / message.axes[dim].gain
-        time_ix = message.get_axis_idx(dim)
-        sample_shape = message.data.shape[:time_ix] + message.data.shape[time_ix + 1 :]
-        return hash((message.key, message.data.dtype, fs, sample_shape))
+        """Change exactly when the outlet's StreamInfo or desc would.
+
+        The layout hash covers the rate (stream-dim gain), channel count, dtype and
+        coordinate values (so the ``ch`` labels); attrs are added because the desc
+        carries them. The key is left out because the outlet does not advertise it.
+        """
+        if message.data.dtype.kind in "US":
+            # A string dtype's width follows each message's longest value; the LSL format does not.
+            message = replace(message, data=np.broadcast_to(np.empty((), dtype=object), message.data.shape))
+        return self._message_hash(
+            message,
+            exclude_dims=(resolve_stream_dim(message, self.STREAMING_DIMS),),
+            include_key=False,
+            extra=[(str(k), str(v)) for k, v in message.attrs.items()],
+        )
+
+    def _reset_segment(self, message: AxisArray) -> None:
+        # The outlet carries nothing across a gap; recreating it would look like a new stream.
+        pass
 
     def _reset_state(self, message: AxisArray) -> None:
         self.shutdown()

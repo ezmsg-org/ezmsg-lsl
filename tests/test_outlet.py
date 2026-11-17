@@ -3,6 +3,7 @@ These unit tests aren't really testable in a runner without a complicated setup 
 This code exists mostly to use during development and debugging.
 """
 
+import re
 import tempfile
 import typing
 from pathlib import Path
@@ -170,3 +171,49 @@ def test_outlet_non_time_stream_dim(dims, stream_dim):
         expected = np.moveaxis(msg.data, dims.index("win"), 0)
         np.testing.assert_array_equal(push.args[0], expected)
         np.testing.assert_allclose(push.kwargs["timestamp"], msg.axes["win"].value(expected.shape[0]))
+
+
+def _ch_msg(labels=("a", "b", "c"), n: int = 5, dtype=np.float32, fs: float = 100.0, **kwargs) -> AxisArray:
+    return AxisArray(
+        data=np.zeros((n, len(labels)), dtype=dtype),
+        dims=["time", "ch"],
+        axes={
+            "time": AxisArray.TimeAxis(fs=fs, offset=0.0),
+            "ch": CoordinateAxis(data=np.array(labels), dims=["ch"]),
+        },
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        _ch_msg(labels=("x", "y", "z")),
+        _ch_msg(attrs={"unit": "uV"}),
+        _ch_msg(dtype=np.int16),
+        _ch_msg(labels=("a", "b", "c", "d")),
+        _ch_msg(fs=200.0),
+    ],
+    ids=["relabel", "attrs", "dtype", "n_ch", "fs"],
+)
+def test_outlet_recreated_when_advertised_info_changes(second):
+    MockOutlet = _run_outlet([_ch_msg(), second])
+    assert MockOutlet.call_count == 2
+    info = MockOutlet.call_args.args[0]
+    assert re.findall(r"<label>(.*?)</label>", info.as_xml()) == list(second.axes["ch"].data)
+    assert info.nominal_srate() == second.axes["time"].gain ** -1
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [_ch_msg(n=5), _ch_msg(n=2), _ch_msg(n=9)],
+        [_ch_msg(segment=0), _ch_msg(segment=1)],
+        [_ch_msg(config_id=1), _ch_msg(config_id=2), _ch_msg(config_id=3, n=2)],
+        [_ch_msg(key="a"), _ch_msg(key="b")],
+        [_ch_msg(dtype="<U1"), _ch_msg(dtype="<U4")],
+    ],
+    ids=["chunk_size", "segment", "config_id", "key", "string_width"],
+)
+def test_outlet_kept_when_advertised_info_unchanged(messages):
+    assert _run_outlet(messages).call_count == 1
