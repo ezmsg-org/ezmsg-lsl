@@ -189,12 +189,11 @@ def _ch_msg(labels=("a", "b", "c"), n: int = 5, dtype=np.float32, fs: float = 10
     "second",
     [
         _ch_msg(labels=("x", "y", "z")),
-        _ch_msg(attrs={"unit": "uV"}),
         _ch_msg(dtype=np.int16),
         _ch_msg(labels=("a", "b", "c", "d")),
         _ch_msg(fs=200.0),
     ],
-    ids=["relabel", "attrs", "dtype", "n_ch", "fs"],
+    ids=["relabel", "dtype", "n_ch", "fs"],
 )
 def test_outlet_recreated_when_advertised_info_changes(second):
     MockOutlet = _run_outlet([_ch_msg(), second])
@@ -212,8 +211,26 @@ def test_outlet_recreated_when_advertised_info_changes(second):
         [_ch_msg(config_id=1), _ch_msg(config_id=2), _ch_msg(config_id=3, n=2)],
         [_ch_msg(key="a"), _ch_msg(key="b")],
         [_ch_msg(dtype="<U1"), _ch_msg(dtype="<U4")],
+        [_ch_msg(), _ch_msg(attrs={"unit": "uV"})],
     ],
-    ids=["chunk_size", "segment", "config_id", "key", "string_width"],
+    ids=["chunk_size", "segment", "config_id", "key", "string_width", "attrs"],
 )
 def test_outlet_kept_when_advertised_info_unchanged(messages):
     assert _run_outlet(messages).call_count == 1
+
+
+@pytest.mark.parametrize("config_id", [None, 7], ids=["no_config_id", "constant_config_id"])
+def test_outlet_desc_attrs_from_first_message(config_id):
+    """Attrs need not be constant: the desc keeps the first message's, and only a layout change recreates."""
+    kw = {} if config_id is None else {"config_id": config_id}
+    msgs = [_ch_msg(attrs={"trigger": i, "value": i / 2}, **kw) for i in range(3)]
+
+    MockOutlet = _run_outlet(msgs)
+    assert MockOutlet.call_count == 1
+    assert MockOutlet.call_args.args[0].desc().child_value("trigger") == "0"
+
+    # A declaring source announces the new layout with a new id; under the same id the hash is never consulted.
+    kw = {} if config_id is None else {"config_id": config_id + 1}
+    MockOutlet = _run_outlet(msgs + [_ch_msg(labels=("a", "b", "c", "d"), attrs={"trigger": 3}, **kw)])
+    assert MockOutlet.call_count == 2
+    assert MockOutlet.call_args.args[0].desc().child_value("trigger") == "3"

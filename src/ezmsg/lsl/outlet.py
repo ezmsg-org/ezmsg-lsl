@@ -136,8 +136,10 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
         """Change exactly when the outlet's StreamInfo or desc would.
 
         The layout hash covers the rate (stream-dim gain), channel count, dtype and
-        coordinate values (so the ``ch`` labels); attrs are added because the desc
-        carries them. The key is left out because the outlet does not advertise it.
+        coordinate values (so the ``ch`` labels). The key is left out because the
+        outlet does not advertise it. Attrs are left out too: they need not be
+        constant, so the desc carries those of the first message of a
+        configuration and later messages' attrs are ignored.
         """
         if message.data.dtype.kind in "US":
             # A string dtype's width follows each message's longest value; the LSL format does not.
@@ -146,7 +148,6 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
             message,
             exclude_dims=(resolve_stream_dim(message, self.STREAMING_DIMS),),
             include_key=False,
-            extra=[(str(k), str(v)) for k, v in message.attrs.items()],
         )
 
     def _reset_segment(self, message: AxisArray) -> None:
