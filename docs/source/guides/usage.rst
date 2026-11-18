@@ -180,6 +180,41 @@ Input Format
 - Extracts channel labels from the ``ch`` axis if present
 
 
+Channel Metadata
+^^^^^^^^^^^^^^^^
+
+The outlet writes the ``ch`` axis into the stream description as conventional
+LSL/XDF channel metadata, and the inlet rebuilds a structured ``ch`` axis from it:
+
+- a plain label array becomes one ``<channel><label>`` per channel;
+- in a structured array, the ``label`` field (or, if there is none, ``name``)
+  becomes ``<label>``; ``x``/``y``/``z`` become ``<location><X|Y|Z>``; every other
+  field becomes an element of the same name holding ``str(value)`` (``bytes`` are
+  decoded). Field names must be valid XML element names, else the outlet raises
+  ``ValueError``.
+
+The inlet reads every child of each ``<channel>`` back as a field (flattening
+``<location>`` to ``x``/``y``/``z``) and infers each field's dtype from the text,
+so field names and values survive the trip but dtypes may not:
+
+- ``label``, ``unit`` and ``type`` are always strings, even if they look numeric;
+- a field becomes an integer (``int64``; ``uint64`` above its range) only if every
+  value reads back as the same text, so ``"007"`` stays a string;
+- other numeric fields become ``float64``, and a numeric field missing on some
+  channels becomes ``float64`` with ``NaN`` for the gaps;
+- a field whose values are all ``True``/``False`` becomes ``bool`` (it stays text
+  if missing on some channels);
+- everything else is a string of the longest value's width (``U16`` may come back
+  as ``U3``).
+
+Expect these differences: a ``name`` field comes back as ``label``; a plain label
+array comes back as a one-field structured array (``label``); ``x``/``y``/``z``
+move next to ``label``; integer dtypes widen to 64 bits; and float values
+written without a decimal point (``"3"``, as other applications may) come back as
+integers. Do not rely on the ``ch`` axis dtype being
+identical across an LSL hop.
+
+
 Timestamp Handling
 ^^^^^^^^^^^^^^^^^^
 

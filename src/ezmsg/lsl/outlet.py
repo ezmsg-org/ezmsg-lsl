@@ -1,4 +1,5 @@
 import hashlib
+import re
 import time
 import typing
 
@@ -56,6 +57,15 @@ def generate_source_id(
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
 
 
+# A subset of the XML Name production (no ":" namespaces).
+_XML_NAME = re.compile(r"[^\W\d][\w.-]*\Z")
+
+
+def _text(value) -> str:
+    """Channel metadata value as XML text; bytes are decoded, not written as ``b'...'``."""
+    return value.decode() if isinstance(value, bytes) else str(value)
+
+
 def populate_desc_from_axisarray(info: pylsl.StreamInfo, message: AxisArray, *, out_size: int) -> None:
     """Populate the ``desc`` of *info* from *message*'s metadata.
 
@@ -63,6 +73,12 @@ def populate_desc_from_axisarray(info: pylsl.StreamInfo, message: AxisArray, *, 
     stream-level ``message.attrs`` as top-level desc XML elements, and
     per-channel labels / structured-array fields from a ``"ch"``
     CoordinateAxis.
+
+    A structured ``ch`` axis is written as conventional LSL/XDF channel
+    metadata: the ``label`` field (or, failing that, ``name``) as ``<label>``,
+    ``x``/``y``/``z`` as ``<location><X|Y|Z>``, and every other field as an
+    element of the same name holding ``str(value)``. Raises ``ValueError`` for a
+    field name that is not a valid XML element name.
     """
     desc = info.desc()
     for key, value in message.attrs.items():
@@ -75,23 +91,26 @@ def populate_desc_from_axisarray(info: pylsl.StreamInfo, message: AxisArray, *, 
             chans = desc.append_child("channels")
             if ch_data.dtype.names is not None:
                 # Structured array — map fields to XDF channel metadata
+                bad = [f for f in ch_data.dtype.names if not _XML_NAME.match(f) or f.lower().startswith("xml")]
+                if bad:
+                    raise ValueError(f"'ch' axis field names are not valid XML element names: {bad}")
                 label_field = next((f for f in ("label", "name") if f in ch_data.dtype.names), None)
                 loc_fields = {f: f.upper() for f in ("x", "y", "z") if f in ch_data.dtype.names}
                 other_fields = [f for f in ch_data.dtype.names if f not in (label_field, "x", "y", "z")]
                 for ch in ch_data:
                     chan = chans.append_child("channel")
                     if label_field is not None:
-                        chan.append_child_value("label", str(ch[label_field]))
+                        chan.append_child_value("label", _text(ch[label_field]))
                     if loc_fields:
                         loc = chan.append_child("location")
                         for struct_f, xml_f in loc_fields.items():
-                            loc.append_child_value(xml_f, str(ch[struct_f]))
+                            loc.append_child_value(xml_f, _text(ch[struct_f]))
                     for f in other_fields:
-                        chan.append_child_value(f, str(ch[f]))
+                        chan.append_child_value(f, _text(ch[f]))
             else:
                 for ch in ch_data:
                     chan = chans.append_child("channel")
-                    chan.append_child_value("label", str(ch))
+                    chan.append_child_value("label", _text(ch))
 
 
 class LSLOutletSettings(ez.Settings):
