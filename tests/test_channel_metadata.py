@@ -2,8 +2,11 @@
 
 import numpy as np
 import pylsl
+import pytest
+from ezmsg.util.messages.axisarray import AxisArray
 
 from ezmsg.lsl.inlet import _parse_channel_metadata
+from ezmsg.lsl.outlet import populate_desc_from_axisarray
 
 CHANNEL_DTYPE = np.dtype(
     [
@@ -17,22 +20,13 @@ CHANNEL_DTYPE = np.dtype(
 
 
 def _write_outlet_metadata(info: pylsl.StreamInfo, ch_data: np.ndarray) -> None:
-    """Replicate the outlet's structured-array → XML logic."""
-    label_field = next((f for f in ("label", "name") if f in ch_data.dtype.names), None)
-    loc_fields = {f: f.upper() for f in ("x", "y", "z") if f in ch_data.dtype.names}
-    other_fields = [f for f in ch_data.dtype.names if f not in (label_field, "x", "y", "z")]
-
-    chans = info.desc().append_child("channels")
-    for ch in ch_data:
-        chan = chans.append_child("channel")
-        if label_field is not None:
-            chan.append_child_value("label", str(ch[label_field]))
-        if loc_fields:
-            loc = chan.append_child("location")
-            for struct_f, xml_f in loc_fields.items():
-                loc.append_child_value(xml_f, str(ch[struct_f]))
-        for f in other_fields:
-            chan.append_child_value(f, str(ch[f]))
+    """Write *ch_data* into *info*'s desc exactly as the outlet does."""
+    msg = AxisArray(
+        data=np.zeros((1, len(ch_data))),
+        dims=["time", "ch"],
+        axes={"time": AxisArray.TimeAxis(fs=100.0), "ch": AxisArray.CoordinateAxis(data=ch_data, dims=["ch"])},
+    )
+    populate_desc_from_axisarray(info, msg, out_size=len(ch_data))
 
 
 def test_roundtrip_structured_metadata():
@@ -123,11 +117,126 @@ def test_dtype_inference():
     assert result is not None
     # label should be a Unicode string type
     assert result.dtype["label"].kind == "U"
-    # elec should be inferred as int
-    assert result.dtype["elec"].kind == "i"
-    # x, y should be inferred as float
-    assert result.dtype["x"].kind == "f"
-    assert result.dtype["y"].kind == "f"
+    # elec should be inferred as int, at full width
+    assert result.dtype["elec"] == np.int64
+    # x, y should be inferred as float, at full precision
+    assert result.dtype["x"] == np.float64
+    assert result.dtype["y"] == np.float64
 
     assert result[0]["elec"] == 42
     assert np.isclose(result[1]["x"], 3.5)
+
+
+def _roundtrip(ch_data: np.ndarray) -> np.ndarray:
+    info = pylsl.StreamInfo("test", "EEG", len(ch_data), 100.0, pylsl.cf_float32, "test_roundtrip")
+    _write_outlet_metadata(info, ch_data)
+    result = _parse_channel_metadata(info.desc().child("channels"), len(ch_data))
+    assert result is not None
+    return result
+
+
+def _assert_same_values(result: np.ndarray, ch_data: np.ndarray) -> None:
+    """Same field names and values; dtypes (and field order) may differ."""
+    assert set(result.dtype.names) == set(ch_data.dtype.names)
+    for f in ch_data.dtype.names:
+        assert result[f].tolist() == ch_data[f].tolist(), f
+
+
+@pytest.mark.parametrize(
+    "ch_data",
+    [
+        pytest.param(np.array([("1",), ("2",)], dtype=[("label", "U4")]), id="numeric-labels"),
+        pytest.param(np.array([("a", "007"), ("b", "010")], dtype=[("label", "U4"), ("id", "U3")]), id="zero-padded"),
+        pytest.param(
+            np.array(
+                [("a", 2**40, 2**64 - 1), ("b", -(2**62), 3)], dtype=[("label", "U1"), ("big", "i8"), ("ubig", "u8")]
+            ),
+            id="large-ints",
+        ),
+        pytest.param(np.array([("a", 0.1), ("b", 1 / 3)], dtype=[("label", "U1"), ("v", "f8")]), id="float64"),
+        pytest.param(np.array([("a", True), ("b", False)], dtype=[("label", "U1"), ("flag", "?")]), id="bools"),
+        pytest.param(
+            np.array(
+                [("1", "uV", "EEG", 3, 0.25, True, "A"), ("2", "mV", "EMG", 4, -1.5, False, "1")],
+                dtype=[
+                    ("label", "U2"),
+                    ("unit", "U2"),
+                    ("type", "U3"),
+                    ("elec", "i4"),
+                    ("gain", "f8"),
+                    ("ok", "?"),
+                    ("bank", "U1"),
+                ],
+            ),
+            id="mixed",
+        ),
+        pytest.param(
+            np.array(
+                [("a", 1.5, -2.0, 0.125), ("b", 3.25, 4.0, 5.5)],
+                dtype=[("label", "U1"), ("x", "f8"), ("y", "f8"), ("z", "f8")],
+            ),
+            id="xyz",
+        ),
+    ],
+)
+def test_outlet_inlet_roundtrip_preserves_values(ch_data):
+    _assert_same_values(_roundtrip(ch_data), ch_data)
+
+
+def test_roundtrip_name_is_published_as_label():
+    ch_data = np.array([("1", 7), ("2", 8)], dtype=[("name", "U1"), ("elec", "i8")])
+    result = _roundtrip(ch_data)
+    assert result["label"].tolist() == ["1", "2"]
+    assert result["elec"].tolist() == [7, 8]
+
+
+def test_roundtrip_bytes_fields_are_decoded():
+    ch_data = np.array([(b"a", b"x1"), (b"b", b"x2")], dtype=[("label", "S1"), ("kind", "S2")])
+    result = _roundtrip(ch_data)
+    assert result["label"].tolist() == ["a", "b"]
+    assert result["kind"].tolist() == ["x1", "x2"]
+
+
+@pytest.mark.parametrize("bad", ["1st", "has space", "xmlish"])
+def test_outlet_rejects_invalid_xml_field_names(bad):
+    ch_data = np.zeros(2, dtype=[("label", "U1"), (bad, "i4")])
+    info = pylsl.StreamInfo("test", "EEG", 2, 100.0, pylsl.cf_float32, "test_bad_name")
+    with pytest.raises(ValueError, match="XML element names"):
+        _write_outlet_metadata(info, ch_data)
+
+
+def test_field_missing_on_some_channels():
+    """A numeric field absent on some channels is NaN there, not 0; a bool one stays text."""
+    info = pylsl.StreamInfo("test", "EEG", 3, 100.0, pylsl.cf_float32, "test_gaps")
+    chans = info.desc().append_child("channels")
+    for label, extra in (
+        ("a", {"elec": "5", "gain": "0.5", "flag": "True"}),
+        ("b", {}),
+        ("c", {"elec": "7", "flag": "False"}),
+    ):
+        chan = chans.append_child("channel")
+        chan.append_child_value("label", label)
+        for k, v in extra.items():
+            chan.append_child_value(k, v)
+
+    result = _parse_channel_metadata(info.desc().child("channels"), 3)
+
+    assert result is not None
+    assert result["label"].tolist() == ["a", "b", "c"]
+    np.testing.assert_array_equal(result["elec"], [5.0, np.nan, 7.0])
+    np.testing.assert_array_equal(result["gain"], [0.5, np.nan, np.nan])
+    assert result["flag"].tolist() == ["True", "", "False"]
+
+
+def test_foreign_desc_with_labels_only():
+    """A desc written by another LSL application: label text is kept as-is."""
+    info = pylsl.StreamInfo("test", "EEG", 3, 100.0, pylsl.cf_float32, "test_foreign")
+    chans = info.desc().append_child("channels")
+    for name in ("01", "2", "Cz"):
+        chans.append_child("channel").append_child_value("label", name)
+
+    result = _parse_channel_metadata(info.desc().child("channels"), 3)
+
+    assert result is not None
+    assert result.dtype.names == ("label",)
+    assert result["label"].tolist() == ["01", "2", "Cz"]

@@ -66,6 +66,10 @@ def digitization(attrs: typing.Mapping[str, typing.Any]) -> typing.Optional[tupl
 def _parse_channel_metadata(chans_elem, n_ch: int) -> typing.Optional[np.ndarray]:
     """Parse a ``<channels>`` XML element into a structured numpy array.
 
+    The inverse of :func:`ezmsg.lsl.outlet.populate_desc_from_axisarray`: each
+    child element becomes a field and ``<location><X|Y|Z>`` becomes ``x``/``y``/``z``.
+    Field dtypes are inferred from the text by :func:`_infer_channel_field`.
+
     Returns ``None`` if the element is empty or the channel count doesn't match.
     """
     if chans_elem.empty():
@@ -101,35 +105,54 @@ def _parse_channel_metadata(chans_elem, n_ch: int) -> typing.Optional[np.ndarray
     if not ch_records or len(ch_records) != n_ch:
         return None
 
-    # Infer a numpy dtype for each field.
-    dtype_fields: list[tuple[str, str]] = []
-    for fname in field_order:
-        vals = [rec.get(fname, "") for rec in ch_records]
-        non_empty = [v for v in vals if v]
-        if non_empty:
-            try:
-                [int(v) for v in non_empty]
-                dtype_fields.append((fname, "i4"))
-                continue
-            except ValueError:
-                pass
-            try:
-                [float(v) for v in non_empty]
-                dtype_fields.append((fname, "f4"))
-                continue
-            except ValueError:
-                pass
-        max_len = max((len(v) for v in vals), default=1) or 1
-        dtype_fields.append((fname, f"U{max_len}"))
-
-    ch_dtype = np.dtype(dtype_fields)
-    ch_data = np.zeros(len(ch_records), dtype=ch_dtype)
-    for i, rec in enumerate(ch_records):
-        for fname in field_order:
-            val = rec.get(fname, "")
-            if val:
-                ch_data[i][fname] = val
+    columns = {f: _infer_channel_field([rec.get(f, "") for rec in ch_records], f) for f in field_order}
+    ch_data = np.zeros(len(ch_records), dtype=[(f, dt) for f, (dt, _) in columns.items()])
+    for fname, (_, values) in columns.items():
+        ch_data[fname] = values
     return ch_data
+
+
+# XDF's conventional channel text fields: kept as strings whatever they look like.
+_STRING_CHANNEL_FIELDS = frozenset({"label", "unit", "type"})
+
+
+def _as_int(text: str) -> typing.Optional[int]:
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _infer_channel_field(vals: list[str], fname: str) -> tuple[str, list]:
+    """Infer a dtype for one ``<channel>`` field from its texts (``""`` = absent).
+
+    Returns ``(dtype, values)``. A value is converted only when the conversion
+    loses nothing: integers (``i8``, or ``u8`` above its range) must read back as
+    the same text (``"007"`` stays a string), floats are ``f8``, bools need
+    every channel to say ``True``/``False``, and a numeric field absent on some
+    channels becomes ``f8`` with ``NaN`` for the gaps (a bool one stays text).
+    """
+    as_text = (f"U{max(map(len, vals), default=1) or 1}", vals)
+    non_empty = [v for v in vals if v]
+    if fname in _STRING_CHANNEL_FIELDS or not non_empty:
+        return as_text
+    complete = len(non_empty) == len(vals)
+    if complete and all(v in ("True", "False") for v in vals):
+        return "?", [v == "True" for v in vals]
+    ints = [_as_int(v) for v in non_empty]
+    if any(i is not None and str(i) != v for i, v in zip(ints, non_empty)):
+        return as_text  # "007", "+1", " 1": formatting would be lost
+    if all(i is not None for i in ints):
+        if complete and all(-(2**63) <= i < 2**63 for i in ints):
+            return "i8", [int(v) for v in vals]
+        if complete and all(0 <= i < 2**64 for i in ints):
+            return "u8", [int(v) for v in vals]
+        if not all(float(i) == i for i in ints):
+            return as_text  # beyond 64 bits, or gaps with ints a float can't hold
+    try:
+        return "f8", [float(v) if v else np.nan for v in vals]
+    except ValueError:
+        return as_text
 
 
 fmt2npdtype = {
