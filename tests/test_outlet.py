@@ -170,7 +170,16 @@ def test_outlet_non_time_stream_dim(dims, stream_dim):
     for msg, push in zip(msgs, pushes):
         expected = np.moveaxis(msg.data, dims.index("win"), 0)
         np.testing.assert_array_equal(push.args[0], expected)
-        np.testing.assert_allclose(push.kwargs["timestamp"], msg.axes["win"].value(expected.shape[0]))
+        np.testing.assert_allclose(push.kwargs["timestamp"], msg.axes["win"].value(expected.shape[0] - 1))
+
+
+def test_outlet_stamps_chunk_with_last_sample_time():
+    """pylsl reads a scalar chunk timestamp as the last sample's time, so pass exactly that."""
+    msg = _ch_msg(n=5, fs=100.0)
+    msg = AxisArray(data=msg.data, dims=msg.dims, axes={**msg.axes, "time": AxisArray.TimeAxis(fs=100.0, offset=2.0)})
+    MockOutlet = _run_outlet([msg])
+    push = MockOutlet.return_value.push_chunk.call_args
+    np.testing.assert_allclose(push.kwargs["timestamp"], 2.0 + 4 / 100.0)
 
 
 def _ch_msg(labels=("a", "b", "c"), n: int = 5, dtype=np.float32, fs: float = 100.0, **kwargs) -> AxisArray:

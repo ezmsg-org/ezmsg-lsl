@@ -220,7 +220,8 @@ class OutletProcessor(BaseStatefulConsumer[LSLOutletSettings, AxisArray, LSLOutl
             if hasattr(message.axes[dim], "data"):
                 ts = message.axes[dim].data
             else:
-                ts = message.axes[dim].value(dat.shape[0])
+                # pylsl takes a single timestamp as the time of the chunk's *last* sample.
+                ts = message.axes[dim].value(max(0, dat.shape[0] - 1))
             if not self.settings.assume_lsl_clock:
                 ts = self._state.clock_sync.system2lsl(ts)
         else:
