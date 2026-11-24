@@ -1,6 +1,6 @@
 # ezmsg-lsl
 
-Interface to Lab Streaming Layer [LSL](https://labstreaminglayer.readthedocs.io/) in [ezmsg](https://github.com/iscoe/ezmsg).
+Interface to Lab Streaming Layer [LSL](https://labstreaminglayer.readthedocs.io/) in [ezmsg](https://github.com/ezmsg-org/ezmsg).
 
 ## Installation
 
